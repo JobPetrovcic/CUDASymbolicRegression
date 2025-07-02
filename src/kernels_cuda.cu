@@ -1,5 +1,5 @@
 #include "kernels.h"
-#include "symbolic_evaluation.h"
+#include "operators.h"
 #include <ATen/native/cuda/Loops.cuh>
 
 // --- CUDA Kernel Definitions ---
@@ -220,6 +220,8 @@ __global__ void validate_inputs_kernel(
 
     if (m >= M || b >= B)
         return;
+
+    // Ensure only one thread can set the error flag
     if (atomicCAS(error_flag_ptr, 0, 0) != 0)
         return;
 
@@ -248,54 +250,49 @@ __global__ void validate_inputs_kernel(
     }
 }
 
-void forward_step_k_impl(
-    torch::Tensor cache, const torch::Tensor &ops, const torch::Tensor &ch,
-    const torch::Tensor &x, const torch::Tensor &Constants,
-    const torch::Tensor &ConstantPosition, int64_t k)
+template <typename scalar_t>
+void forward_step_k_cuda_impl(
+    scalar_t *cache_ptr, const int64_t *ops_ptr, const int64_t *ch_ptr,
+    const scalar_t *x_ptr, const scalar_t *c_ptr,
+    const int64_t *ConstantPosition_ptr, int64_t M, int64_t B, int64_t N,
+    int64_t n_x, int64_t k)
 {
+    dim3 threadsPerBlock(B_b, N_b);
+    dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                   (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    size_t smem_size = 2 * B_b * N_b * sizeof(scalar_t); // For two tiles
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(cache.scalar_type(), "forward_step_k_cuda", ([&]
-                                                                                     {
-        const auto M = ops.size(0), B = ops.size(1), N = x.size(0), n_x = x.size(1);
-        dim3 threadsPerBlock(B_b, N_b);
-        dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x, (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
-        size_t smem_size = 2 * B_b * N_b * sizeof(scalar_t); // For two tiles
-
-        forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock, smem_size>>>(
-            cache.data_ptr<scalar_t>(), ops.data_ptr<int64_t>(), ch.data_ptr<int64_t>(),
-            x.data_ptr<scalar_t>(), Constants.data_ptr<scalar_t>(), ConstantPosition.data_ptr<int64_t>(),
-            M, B, N, n_x, k
-        );
-        C10_CUDA_KERNEL_LAUNCH_CHECK(); }));
+    forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock, smem_size>>>(
+        cache_ptr, ops_ptr, ch_ptr, x_ptr, c_ptr, ConstantPosition_ptr, M, B, N,
+        n_x, k);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-void backward_step_k_impl(
-    torch::Tensor grad_cache, torch::Tensor grad_Constants, torch::Tensor grad_x,
-    const torch::Tensor &cache, const torch::Tensor &ops, const torch::Tensor &ch,
-    const torch::Tensor &ConstantPosition, int64_t k)
+template <typename scalar_t>
+void backward_step_k_cuda_impl(
+    scalar_t *grad_cache_ptr, scalar_t *grad_c_ptr, scalar_t *grad_x_ptr,
+    const scalar_t *cache_ptr, const int64_t *ops_ptr, const int64_t *ch_ptr,
+    const int64_t *ConstantPosition_ptr, int64_t M, int64_t B, int64_t N,
+    int64_t n_x, int64_t k)
 {
+    dim3 threadsPerBlock(B_b, N_b);
+    dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                   (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_cache.scalar_type(), "backward_step_k_cuda", ([&]
-                                                                                           {
-        const auto M = ops.size(0), B = ops.size(1), N = cache.size(2), n_x = grad_x.size(1);
-        dim3 threadsPerBlock(B_b, N_b);
-        dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x, (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
-
-        backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
-            grad_cache.data_ptr<scalar_t>(), grad_Constants.data_ptr<scalar_t>(), grad_x.data_ptr<scalar_t>(),
-            cache.data_ptr<scalar_t>(), ops.data_ptr<int64_t>(), ch.data_ptr<int64_t>(), ConstantPosition.data_ptr<int64_t>(),
-            M, B, N, n_x, k
-        );
-        C10_CUDA_KERNEL_LAUNCH_CHECK(); }));
+    backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
+        grad_cache_ptr, grad_c_ptr, grad_x_ptr, cache_ptr, ops_ptr, ch_ptr,
+        ConstantPosition_ptr, M, B, N, n_x, k);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-void validate_inputs_impl(const torch::Tensor &ops, const torch::Tensor &ch, torch::Tensor &error_flag)
+void validate_inputs_cuda_impl(const int64_t *ops_ptr, const int64_t *ch_ptr,
+                               int32_t *error_flag_ptr, int64_t M, int64_t B)
 {
-    const auto M = ops.size(0), B = ops.size(1);
     dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((M + threadsPerBlock.x - 1) / threadsPerBlock.x, (B + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    dim3 numBlocks((M + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                   (B + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     validate_inputs_kernel<<<numBlocks, threadsPerBlock>>>(
-        ops.data_ptr<int64_t>(), ch.data_ptr<int64_t>(), M, B, error_flag.data_ptr<int32_t>());
+        ops_ptr, ch_ptr, M, B, error_flag_ptr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
