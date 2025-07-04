@@ -1,6 +1,9 @@
 #include "kernels.h"
 #include "operators.h"
 #include <ATen/native/cuda/Loops.cuh>
+#include <ATen/cuda/Atomic.cuh>
+
+// TODO: faster memory loading in kernels
 
 // --- CUDA Kernel Definitions ---
 
@@ -10,38 +13,41 @@ constexpr size_t N_b = 16; // Tile dimension for data points
 
 template <typename scalar_t>
 __global__ void forward_step_k_kernel(
-    scalar_t *cache_ptr, const int64_t *ops_ptr, const int64_t *ch_ptr,
-    const scalar_t *x_ptr, const scalar_t *c_ptr, const int64_t *ConstantPosition_ptr,
-    size_t M, size_t B, size_t N, size_t n_x, size_t k)
+    torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 1> c_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    size_t n_x, size_t k)
 {
     size_t b_global = blockIdx.x * blockDim.x + threadIdx.x;
     size_t n_global = blockIdx.y * blockDim.y + threadIdx.y;
+
+    const size_t B = ops_acc.size(1);
+    const size_t N = x_acc.size(0);
+
     if (b_global >= B || n_global >= N)
         return;
 
-    size_t b_local = threadIdx.x;
-    size_t n_local = threadIdx.y;
-    extern __shared__ scalar_t tile_args[];
-    scalar_t *tile_arg0 = tile_args;
-    scalar_t *tile_arg1 = &tile_args[B_b * N_b];
-    size_t op_idx = k * B + b_global;
-    int op = ops_ptr[op_idx];
+    int64_t op = ops_acc[k][b_global];
+    scalar_t arg0 = static_cast<scalar_t>(0.0);
+    scalar_t arg1 = static_cast<scalar_t>(0.0);
 
     if (op != NO_OP)
     {
         int arity = get_arity(op);
         if (arity >= 1)
         {
-            size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-            tile_arg0[b_local * N_b + n_local] = cache_ptr[child0_k * B * N + b_global * N + n_global];
+            int64_t child0_k = ch_acc[k][b_global][0];
+            arg0 = cache_acc[child0_k][b_global][n_global];
         }
         if (arity == 2)
         {
-            size_t child1_k = ch_ptr[op_idx * MAX_ARITY + 1];
-            tile_arg1[b_local * N_b + n_local] = cache_ptr[child1_k * B * N + b_global * N + n_global];
+            int64_t child1_k = ch_acc[k][b_global][1];
+            arg1 = cache_acc[child1_k][b_global][n_global];
         }
     }
-    __syncthreads();
 
     scalar_t result = static_cast<scalar_t>(0.0);
     // CORRECTED: Unified switch statement
@@ -51,52 +57,50 @@ __global__ void forward_step_k_kernel(
         break; // Do nothing for NO_OP
     case LEARNABLE_CONSTANT:
     {
-        int64_t c_idx = ConstantPosition_ptr[op_idx];
+        int64_t c_idx = posC_acc[k][b_global];
         if (c_idx != -1)
-            result = c_ptr[c_idx];
+            result = c_acc[c_idx];
         break;
     }
     case CONST_1:
         result = static_cast<scalar_t>(1.0);
         break;
     case SIN:
-        result = sin_wrapper(tile_arg0[b_local * N_b + n_local]);
+        result = sin_wrapper(arg0);
         break;
     case COS:
-        result = cos_wrapper(tile_arg0[b_local * N_b + n_local]);
+        result = cos_wrapper(arg0);
         break;
     case EXP:
-        result = exp_wrapper(tile_arg0[b_local * N_b + n_local]);
+        result = exp_wrapper(arg0);
         break;
     case LOG:
-        result = log_wrapper(tile_arg0[b_local * N_b + n_local]);
+        result = log_wrapper(arg0);
         break;
     case SQUARE:
-        result = square_wrapper(tile_arg0[b_local * N_b + n_local]);
+        result = square_wrapper(arg0);
         break;
     case SQRT:
-        result = sqrt_wrapper(tile_arg0[b_local * N_b + n_local]);
+        result = sqrt_wrapper(arg0);
         break;
     case ADD:
-        // BUG FIX: Corrected arguments to wrapper
-        result = add_wrapper(tile_arg0[b_local * N_b + n_local], tile_arg1[b_local * N_b + n_local]);
+        result = add_wrapper(arg0, arg1);
         break;
     case SUB:
-        result = sub_wrapper(tile_arg0[b_local * N_b + n_local], tile_arg1[b_local * N_b + n_local]);
+        result = sub_wrapper(arg0, arg1);
         break;
     case MUL:
-        // BUG FIX: Corrected arguments to wrapper
-        result = mul_wrapper(tile_arg0[b_local * N_b + n_local], tile_arg1[b_local * N_b + n_local]);
+        result = mul_wrapper(arg0, arg1);
         break;
     case DIV:
-        result = div_wrapper(tile_arg0[b_local * N_b + n_local], tile_arg1[b_local * N_b + n_local]);
+        result = div_wrapper(arg0, arg1);
         break;
     default:
     {
         if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
         {
             size_t var_idx = op - VAR_START_ID;
-            result = x_ptr[n_global * n_x + var_idx];
+            result = x_acc[n_global][var_idx];
         }
     }
     }
@@ -104,101 +108,115 @@ __global__ void forward_step_k_kernel(
     // BUG FIX: Only write to the cache if the operation was not a NO_OP.
     if (op != NO_OP)
     {
-        cache_ptr[k * B * N + b_global * N + n_global] = result;
+        cache_acc[k][b_global][n_global] = result;
     }
 }
 
 template <typename scalar_t>
 __global__ void backward_step_k_kernel(
-    scalar_t *grad_cache_ptr, scalar_t *grad_c_ptr, scalar_t *grad_x_ptr,
-    const scalar_t *cache_ptr, const int64_t *ops_ptr, const int64_t *ch_ptr,
-    const int64_t *ConstantPosition_ptr, size_t M, size_t B, size_t N, size_t n_x, size_t k)
+    torch::PackedTensorAccessor64<scalar_t, 3> grad_cache_acc,
+    torch::PackedTensorAccessor64<scalar_t, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    size_t n_x, size_t k)
 {
     size_t b_global = blockIdx.x * blockDim.x + threadIdx.x;
     size_t n_global = blockIdx.y * blockDim.y + threadIdx.y;
+
+    const size_t B = ops_acc.size(1);
+    const size_t N = grad_x_acc.size(0);
+
     if (b_global >= B || n_global >= N)
         return;
 
-    size_t current_idx = k * B * N + b_global * N + n_global;
-    scalar_t g_in = grad_cache_ptr[current_idx];
+    scalar_t g_in = grad_cache_acc[k][b_global][n_global];
     if (g_in == static_cast<scalar_t>(0.0))
         return;
 
-    size_t op_idx = k * B + b_global;
-    int op = ops_ptr[op_idx];
+    int64_t op = ops_acc[k][b_global];
 
     switch (op)
     {
     case LEARNABLE_CONSTANT:
     {
-        int64_t c_idx = ConstantPosition_ptr[op_idx];
+        int64_t c_idx = posC_acc[k][b_global];
         if (c_idx != -1)
-            at::atomicAdd(&grad_c_ptr[c_idx], g_in);
+        {
+            gpuAtomicAdd(&grad_c_acc[c_idx], g_in);
+        }
         break;
     }
     case SIN:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        scalar_t child_val = cache_ptr[child0_k * B * N + b_global * N + n_global];
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], g_in * cos_wrapper(child_val));
+        int64_t child0_k = ch_acc[k][b_global][0];
+        scalar_t child_val = cache_acc[child0_k][b_global][n_global];
+        scalar_t grad_out = mul_wrapper(g_in, cos_wrapper(child_val));
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
         break;
     }
     case COS:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        scalar_t child_val = cache_ptr[child0_k * B * N + b_global * N + n_global];
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], g_in * -sin_wrapper(child_val));
+        int64_t child0_k = ch_acc[k][b_global][0];
+        scalar_t child_val = cache_acc[child0_k][b_global][n_global];
+        scalar_t grad_out = mul_wrapper(g_in, -sin_wrapper(child_val));
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
         break;
     }
     case MUL:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        size_t child1_k = ch_ptr[op_idx * MAX_ARITY + 1];
-        scalar_t child0_val = cache_ptr[child0_k * B * N + b_global * N + n_global];
-        scalar_t child1_val = cache_ptr[child1_k * B * N + b_global * N + n_global];
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], g_in * child1_val);
-        at::atomicAdd(&grad_cache_ptr[child1_k * B * N + b_global * N + n_global], g_in * child0_val);
+        int64_t child0_k = ch_acc[k][b_global][0];
+        int64_t child1_k = ch_acc[k][b_global][1];
+        scalar_t child0_val = cache_acc[child0_k][b_global][n_global];
+        scalar_t child1_val = cache_acc[child1_k][b_global][n_global];
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], mul_wrapper(g_in, child1_val));
+        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], mul_wrapper(g_in, child0_val));
         break;
     }
     case ADD:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        size_t child1_k = ch_ptr[op_idx * MAX_ARITY + 1];
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], g_in);
-        at::atomicAdd(&grad_cache_ptr[child1_k * B * N + b_global * N + n_global], g_in);
+        int64_t child0_k = ch_acc[k][b_global][0];
+        int64_t child1_k = ch_acc[k][b_global][1];
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], g_in);
+        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], g_in);
         break;
     }
     case SUB:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        size_t child1_k = ch_ptr[op_idx * MAX_ARITY + 1];
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], g_in);
-        at::atomicAdd(&grad_cache_ptr[child1_k * B * N + b_global * N + n_global], -g_in);
+        int64_t child0_k = ch_acc[k][b_global][0];
+        int64_t child1_k = ch_acc[k][b_global][1];
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], g_in);
+        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], -g_in);
         break;
     }
     case DIV:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        size_t child1_k = ch_ptr[op_idx * MAX_ARITY + 1];
-        scalar_t child0_val = cache_ptr[child0_k * B * N + b_global * N + n_global];
-        scalar_t child1_val = cache_ptr[child1_k * B * N + b_global * N + n_global];
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], div_wrapper(g_in, child1_val));
-        at::atomicAdd(&grad_cache_ptr[child1_k * B * N + b_global * N + n_global], -mul_wrapper(g_in, div_wrapper(child0_val, square_wrapper(child1_val))));
+        int64_t child0_k = ch_acc[k][b_global][0];
+        int64_t child1_k = ch_acc[k][b_global][1];
+        scalar_t child0_val = cache_acc[child0_k][b_global][n_global];
+        scalar_t child1_val = cache_acc[child1_k][b_global][n_global];
+        scalar_t grad_out0 = div_wrapper(g_in, child1_val);
+        scalar_t grad_out1 = mul_wrapper(g_in, div_wrapper(-child0_val, mul_wrapper(child1_val, child1_val)));
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out0);
+        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], grad_out1);
         break;
     }
     case SQUARE:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        scalar_t child0_val = cache_ptr[child0_k * B * N + b_global * N + n_global];
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], g_in * static_cast<scalar_t>(2.0) * child0_val);
+        int64_t child0_k = ch_acc[k][b_global][0];
+        scalar_t child_val = cache_acc[child0_k][b_global][n_global];
+        scalar_t grad_out = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(2.0), child_val));
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
         break;
     }
     case SQRT:
     {
-        size_t child0_k = ch_ptr[op_idx * MAX_ARITY + 0];
-        scalar_t out_val = cache_ptr[current_idx];
+        scalar_t out_val = cache_acc[k][b_global][n_global];
         scalar_t grad_out = div_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(2.0), out_val));
-        at::atomicAdd(&grad_cache_ptr[child0_k * B * N + b_global * N + n_global], grad_out);
+        int64_t child0_k = ch_acc[k][b_global][0];
+        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
         break;
     }
     default:
@@ -206,17 +224,22 @@ __global__ void backward_step_k_kernel(
         if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
         {
             size_t var_idx = op - VAR_START_ID;
-            at::atomicAdd(&grad_x_ptr[n_global * n_x + var_idx], g_in);
+            gpuAtomicAdd(&grad_x_acc[n_global][var_idx], g_in);
         }
     }
     }
 }
 
 __global__ void validate_inputs_kernel(
-    const int64_t *ops_ptr, const int64_t *ch_ptr, size_t M, size_t B, int32_t *error_flag_ptr)
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    int32_t *error_flag_ptr)
 {
     size_t m = blockIdx.x * blockDim.x + threadIdx.x;
     size_t b = blockIdx.y * blockDim.y + threadIdx.y;
+
+    const size_t M = ops_acc.size(0);
+    const size_t B = ops_acc.size(1);
 
     if (m >= M || b >= B)
         return;
@@ -225,74 +248,163 @@ __global__ void validate_inputs_kernel(
     if (atomicCAS(error_flag_ptr, 0, 0) != 0)
         return;
 
-    size_t op_idx = m * B + b;
-    int op = ops_ptr[op_idx];
+    int64_t op = ops_acc[m][b];
 
     int expected_arity = get_arity(op);
     int actual_arity = 0;
     for (int i = 0; i < MAX_ARITY; ++i)
     {
-        int64_t child_k = ch_ptr[op_idx * MAX_ARITY + i];
+        int64_t child_k = ch_acc[m][b][i];
         if (child_k != -1)
         {
             actual_arity++;
             if (child_k >= m)
             {
-                atomicExch(error_flag_ptr, 1); // Error: Invalid child index
+                atomicCAS(error_flag_ptr, 0, 1);
                 return;
             }
         }
     }
+
     if (actual_arity != expected_arity)
     {
-        atomicExch(error_flag_ptr, 2); // Error: Arity mismatch
-        return;
+        atomicCAS(error_flag_ptr, 0, 1);
     }
 }
 
 template <typename scalar_t>
 void forward_step_k_cuda_impl(
-    scalar_t *cache_ptr, const int64_t *ops_ptr, const int64_t *ch_ptr,
-    const scalar_t *x_ptr, const scalar_t *c_ptr,
-    const int64_t *ConstantPosition_ptr, int64_t M, int64_t B, int64_t N,
+    torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 1> c_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k)
 {
+    const int64_t B = ops_acc.size(1);
+    const int64_t N = x_acc.size(0);
     dim3 threadsPerBlock(B_b, N_b);
     dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
                    (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
-    size_t smem_size = 2 * B_b * N_b * sizeof(scalar_t); // For two tiles
 
-    forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock, smem_size>>>(
-        cache_ptr, ops_ptr, ch_ptr, x_ptr, c_ptr, ConstantPosition_ptr, M, B, N,
-        n_x, k);
+    forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
+        cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 template <typename scalar_t>
 void backward_step_k_cuda_impl(
-    scalar_t *grad_cache_ptr, scalar_t *grad_c_ptr, scalar_t *grad_x_ptr,
-    const scalar_t *cache_ptr, const int64_t *ops_ptr, const int64_t *ch_ptr,
-    const int64_t *ConstantPosition_ptr, int64_t M, int64_t B, int64_t N,
+    torch::PackedTensorAccessor64<scalar_t, 3> grad_cache_acc,
+    torch::PackedTensorAccessor64<scalar_t, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k)
 {
+    const int64_t B = ops_acc.size(1);
+    const int64_t N = grad_x_acc.size(0);
     dim3 threadsPerBlock(B_b, N_b);
     dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
                    (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
-        grad_cache_ptr, grad_c_ptr, grad_x_ptr, cache_ptr, ops_ptr, ch_ptr,
-        ConstantPosition_ptr, M, B, N, n_x, k);
+        grad_cache_acc, grad_c_acc, grad_x_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-void validate_inputs_cuda_impl(const int64_t *ops_ptr, const int64_t *ch_ptr,
-                               int32_t *error_flag_ptr, int64_t M, int64_t B)
+void validate_inputs_cuda_impl(
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    int32_t *error_flag_ptr)
 {
+    const int64_t M = ops_acc.size(0);
+    const int64_t B = ops_acc.size(1);
     dim3 threadsPerBlock(16, 16);
     dim3 numBlocks((M + threadsPerBlock.x - 1) / threadsPerBlock.x,
                    (B + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     validate_inputs_kernel<<<numBlocks, threadsPerBlock>>>(
-        ops_ptr, ch_ptr, M, B, error_flag_ptr);
+        ops_acc, ch_acc, error_flag_ptr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
+
+// Explicitly instantiate templates for float and double
+template __global__ void forward_step_k_kernel<float>(
+    torch::PackedTensorAccessor64<float, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<float, 2> x_acc,
+    torch::PackedTensorAccessor64<float, 1> c_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    size_t n_x, size_t k);
+
+template __global__ void forward_step_k_kernel<double>(
+    torch::PackedTensorAccessor64<double, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<double, 2> x_acc,
+    torch::PackedTensorAccessor64<double, 1> c_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    size_t n_x, size_t k);
+
+template __global__ void backward_step_k_kernel<float>(
+    torch::PackedTensorAccessor64<float, 3> grad_cache_acc,
+    torch::PackedTensorAccessor64<float, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<float, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<float, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    size_t n_x, size_t k);
+
+template __global__ void backward_step_k_kernel<double>(
+    torch::PackedTensorAccessor64<double, 3> grad_cache_acc,
+    torch::PackedTensorAccessor64<double, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<double, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<double, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    size_t n_x, size_t k);
+
+// Explicit template instantiation for scalar types
+template void forward_step_k_cuda_impl<float>(
+    torch::PackedTensorAccessor64<float, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<float, 2> x_acc,
+    torch::PackedTensorAccessor64<float, 1> c_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    int64_t n_x, int64_t k);
+
+template void backward_step_k_cuda_impl<float>(
+    torch::PackedTensorAccessor64<float, 3> grad_cache_acc,
+    torch::PackedTensorAccessor64<float, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<float, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<float, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    int64_t n_x, int64_t k);
+
+template void forward_step_k_cuda_impl<double>(
+    torch::PackedTensorAccessor64<double, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<double, 2> x_acc,
+    torch::PackedTensorAccessor64<double, 1> c_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    int64_t n_x, int64_t k);
+
+template void backward_step_k_cuda_impl<double>(
+    torch::PackedTensorAccessor64<double, 3> grad_cache_acc,
+    torch::PackedTensorAccessor64<double, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<double, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<double, 3> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    int64_t n_x, int64_t k);

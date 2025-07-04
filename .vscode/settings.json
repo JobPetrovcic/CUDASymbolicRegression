@@ -24,6 +24,8 @@
         "utility": "cpp",
         "vector": "cpp",
         "tuple": "cpp",
-        "cmath": "cpp"
+        "cmath": "cpp",
+        "atomic": "cpp",
+        "memory": "cpp"
     }
 }

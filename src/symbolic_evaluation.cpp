@@ -20,14 +20,18 @@ void validate_inputs(const torch::Tensor &Ops, const torch::Tensor &Ch, int n_x)
     // --- Launch validation kernel ---
     if (device.is_cuda())
     {
-        validate_inputs_cuda_impl(Ops.data_ptr<int64_t>(), Ch.data_ptr<int64_t>(), error_flag_ptr, M, B);
+        validate_inputs_cuda_impl(Ops.packed_accessor64<int64_t, 2>(), Ch.packed_accessor64<int64_t, 3>(), error_flag_ptr);
     }
     else
     {
-        validate_inputs_cpu_impl(Ops.data_ptr<int64_t>(), Ch.data_ptr<int64_t>(), error_flag_ptr, M, B);
+        validate_inputs_cpu_impl(Ops.accessor<int64_t, 2>(), Ch.accessor<int64_t, 3>(), error_flag_ptr);
     }
 
     // --- Copy error flag to CPU and check ---
+    if (device.is_cuda())
+    {
+        // TODO: Add cudaEventSynchronize if needed
+    }
     int32_t error_flag_cpu = error_flag_tensor.item<int32_t>();
     TORCH_CHECK(error_flag_cpu == 0, "Input validation failed. This may be due to an invalid operator or child index.");
 }
@@ -58,22 +62,30 @@ torch::Tensor SymbolicEvaluation::forward(
 
     AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_forward", ([&]
                                                                      {
-        scalar_t *cache_ptr = cache.data_ptr<scalar_t>();
-        const int64_t *ops_ptr = Ops.data_ptr<int64_t>();
-        const int64_t *ch_ptr = Ch.data_ptr<int64_t>();
-        const scalar_t *x_ptr = X.data_ptr<scalar_t>();
-        const scalar_t *Constants_ptr = C.data_ptr<scalar_t>();
-        const int64_t *ConstantPosition_ptr = posC.data_ptr<int64_t>();
-
-        for (int64_t k = 0; k < M; ++k)
+        if (device.is_cuda())
         {
-            if (device.is_cuda())
+            auto cache_acc = cache.packed_accessor64<scalar_t, 3>();
+            auto ops_acc = Ops.packed_accessor64<int64_t, 2>();
+            auto ch_acc = Ch.packed_accessor64<int64_t, 3>();
+            auto x_acc = X.packed_accessor64<scalar_t, 2>();
+            auto c_acc = C.packed_accessor64<scalar_t, 1>();
+            auto posC_acc = posC.packed_accessor64<int64_t, 2>();
+            for (int64_t k = 0; k < M; ++k)
             {
-                forward_step_k_cuda_impl<scalar_t>(cache_ptr, ops_ptr, ch_ptr, x_ptr, Constants_ptr, ConstantPosition_ptr, M, B, N, n_x, k);
+                forward_step_k_cuda_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
             }
-            else
+        }
+        else
+        {
+            auto cache_acc = cache.accessor<scalar_t, 3>();
+            auto ops_acc = Ops.accessor<int64_t, 2>();
+            auto ch_acc = Ch.accessor<int64_t, 3>();
+            auto x_acc = X.accessor<scalar_t, 2>();
+            auto c_acc = C.accessor<scalar_t, 1>();
+            auto posC_acc = posC.accessor<int64_t, 2>();
+            for (int64_t k = 0; k < M; ++k)
             {
-                forward_step_k_cpu_impl<scalar_t>(cache_ptr, ops_ptr, ch_ptr, x_ptr, Constants_ptr, ConstantPosition_ptr, M, B, N, n_x, k);
+                forward_step_k_cpu_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
             }
         } }));
 
@@ -110,24 +122,33 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
 
     AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_backward", ([&]
                                                                       {
-        scalar_t *grad_cache_ptr = grad_cache.data_ptr<scalar_t>();
-        scalar_t *grad_c_ptr = grad_C.data_ptr<scalar_t>();
-        scalar_t *grad_x_ptr = grad_X.data_ptr<scalar_t>();
-        const scalar_t *cache_ptr = cache.data_ptr<scalar_t>();
-        const int64_t *ops_ptr = Ops.data_ptr<int64_t>();
-        const int64_t *ch_ptr = Ch.data_ptr<int64_t>();
-        const int64_t *ConstantPosition_ptr = posC.data_ptr<int64_t>();
-
-        for (int64_t k = M - 1; k >= 0; --k)
+        if (device.is_cuda())
         {
-            if (device.is_cuda())
+            auto grad_cache_acc = grad_cache.packed_accessor64<scalar_t, 3>();
+            auto grad_C_acc = grad_C.packed_accessor64<scalar_t, 1>();
+            auto grad_X_acc = grad_X.packed_accessor64<scalar_t, 2>();
+            auto cache_acc = cache.packed_accessor64<scalar_t, 3>();
+            auto ops_acc = Ops.packed_accessor64<int64_t, 2>();
+            auto ch_acc = Ch.packed_accessor64<int64_t, 3>();
+            auto posC_acc = posC.packed_accessor64<int64_t, 2>();
+            for (int64_t k = M - 1; k >= 0; --k)
             {
-                backward_step_k_cuda_impl<scalar_t>(grad_cache_ptr, grad_c_ptr, grad_x_ptr, cache_ptr, ops_ptr, ch_ptr, ConstantPosition_ptr, M, B, N, n_x, k);
+                backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k);
             }
-            else
+        }
+        else
+        {
+            auto grad_cache_acc = grad_cache.accessor<scalar_t, 3>();
+            auto grad_C_acc = grad_C.accessor<scalar_t, 1>();
+            auto grad_X_acc = grad_X.accessor<scalar_t, 2>();
+            auto cache_acc = cache.accessor<scalar_t, 3>();
+            auto ops_acc = Ops.accessor<int64_t, 2>();
+            auto ch_acc = Ch.accessor<int64_t, 3>();
+            auto posC_acc = posC.accessor<int64_t, 2>();
+            for (int64_t k = M - 1; k >= 0; --k)
             {
-                backward_step_k_cpu_impl<scalar_t>(grad_cache_ptr, grad_c_ptr, grad_x_ptr, cache_ptr, ops_ptr, ch_ptr, ConstantPosition_ptr, M, B, N, n_x, k);
-            }
+                backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k);
+        }
         } }));
 
     return {grad_X,
@@ -155,6 +176,16 @@ std::tuple<torch::Tensor, torch::Tensor> evaluate(
     TORCH_CHECK(Ops.size(0) == Ch.size(0), "Ops and Ch must have the same max length (dim 0)");
     TORCH_CHECK(Ops.size(1) == Ch.size(1), "Ops and Ch must have the same batch size (dim 1)");
     TORCH_CHECK(Ch.size(2) == MAX_ARITY, "Ch must have MaxArity as its last dimension");
+
+    // Check that X and C_opt are floating and Ch and Ops are Long tensors
+    TORCH_CHECK(X.scalar_type() == torch::kFloat || X.scalar_type() == torch::kDouble,
+                "X must be a floating-point tensor (float or double)");
+    if (C_opt.has_value())
+    {
+        TORCH_CHECK(C_opt->scalar_type() == torch::kFloat || C_opt->scalar_type() == torch::kDouble,
+                    "C must be a floating-point tensor (float or double)");
+    }
+
     TORCH_CHECK(Ops.scalar_type() == torch::kInt64, "Ops must be a Long tensor");
     TORCH_CHECK(Ch.scalar_type() == torch::kInt64, "Ch must be a Long tensor");
 
@@ -204,5 +235,22 @@ std::tuple<torch::Tensor, torch::Tensor> evaluate(
 // --- Pybind11 Bindings ---
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
+    pybind11::enum_<Operator>(m, "Operator", "Enum for symbolic operations")
+        .value("NO_OP", Operator::NO_OP)
+        .value("LEARNABLE_CONSTANT", Operator::LEARNABLE_CONSTANT)
+        .value("CONST_1", Operator::CONST_1)
+        .value("SIN", Operator::SIN)
+        .value("COS", Operator::COS)
+        .value("EXP", Operator::EXP)
+        .value("LOG", Operator::LOG)
+        .value("SQUARE", Operator::SQUARE)
+        .value("SQRT", Operator::SQRT)
+        .value("ADD", Operator::ADD)
+        .value("SUB", Operator::SUB)
+        .value("MUL", Operator::MUL)
+        .value("DIV", Operator::DIV)
+        .value("VAR_START_ID", Operator::VAR_START_ID)
+        .export_values();
+
     m.def("evaluate", &evaluate, "Evaluate a batch of symbolic expressions.");
 }

@@ -1,0 +1,6 @@
+*.pyc
+*.so
+symbolic_torch.egg-info/
+.vscode/
+__pycache__/
+build/
