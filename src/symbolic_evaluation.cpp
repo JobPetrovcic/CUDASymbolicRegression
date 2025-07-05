@@ -1,4 +1,6 @@
 #include "symbolic_evaluation.h"
+#include <iostream>
+#include <c10/cuda/CUDAStream.h>
 
 // --- Helper Functions ---
 void validate_inputs(const torch::Tensor &Ops, const torch::Tensor &Ch, int n_x)
@@ -27,11 +29,6 @@ void validate_inputs(const torch::Tensor &Ops, const torch::Tensor &Ch, int n_x)
         validate_inputs_cpu_impl(Ops.accessor<int64_t, 2>(), Ch.accessor<int64_t, 3>(), error_flag_ptr);
     }
 
-    // --- Copy error flag to CPU and check ---
-    if (device.is_cuda())
-    {
-        // TODO: Add cudaEventSynchronize if needed
-    }
     int32_t error_flag_cpu = error_flag_tensor.item<int32_t>();
     TORCH_CHECK(error_flag_cpu == 0, "Input validation failed. This may be due to an invalid operator or child index.");
 }
@@ -58,7 +55,7 @@ torch::Tensor SymbolicEvaluation::forward(
     const int64_t N = X.size(0);
     const int64_t n_x = X.size(1);
 
-    auto cache = torch::zeros({M, B, N}, X.options());
+    auto cache = torch::zeros({M, N, B}, X.options());
 
     AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_forward", ([&]
                                                                      {
@@ -91,7 +88,7 @@ torch::Tensor SymbolicEvaluation::forward(
 
     ctx->save_for_backward({X, Ops, Ch, C, posC, cache});
 
-    return cache.slice(0, M - 1, M).squeeze(0);
+    return cache;
 }
 
 torch::autograd::variable_list SymbolicEvaluation::backward(
@@ -114,11 +111,20 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
     const int64_t SC = C.size(0);
 
     auto grad_output = grad_outputs[0];
+    TORCH_INTERNAL_ASSERT(cache.sizes() == grad_output.sizes(),
+                          "Cache and grad_output must have the same shape. "
+                          "Cache shape: ",
+                          cache.sizes(), ", grad_output shape: ", grad_output.sizes());
     auto grad_cache = torch::zeros_like(cache);
-    grad_cache.slice(0, M - 1, M) = grad_output.unsqueeze(0);
+    grad_cache.add_(grad_output);
 
     auto grad_X = torch::zeros_like(X);
     auto grad_C = torch::zeros_like(C);
+
+    // --- Allocate error flag on the same device ---
+    auto options = torch::TensorOptions().dtype(torch::kInt32).device(device);
+    auto error_flag_tensor = torch::zeros({1}, options);
+    int32_t *error_flag_ptr = error_flag_tensor.data_ptr<int32_t>();
 
     AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_backward", ([&]
                                                                       {
@@ -133,7 +139,7 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
             auto posC_acc = posC.packed_accessor64<int64_t, 2>();
             for (int64_t k = M - 1; k >= 0; --k)
             {
-                backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k);
+                backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
             }
         }
         else
@@ -147,9 +153,38 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
             auto posC_acc = posC.accessor<int64_t, 2>();
             for (int64_t k = M - 1; k >= 0; --k)
             {
-                backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k);
-        }
+                backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
+            }
         } }));
+
+    int32_t error_flag_cpu = error_flag_tensor.item<int32_t>();
+    std::cout << "Backward error flag: " << error_flag_cpu << std::endl;
+
+    // Check for errors from the backward pass
+    if (error_flag_cpu != 0)
+    {
+        switch (error_flag_cpu)
+        {
+        case 1:
+            TORCH_CHECK(false, "Backward error: NaN/inf gradient detected. Error code 1.");
+            break;
+        case 2:
+            TORCH_CHECK(false, "Backward error: Gradient propagated to a NO_OP node. Error code 2.");
+            break;
+        case 3:
+            TORCH_CHECK(false, "Backward error: Gradient propagated to a LOG node with a non-positive argument. Error code 3.");
+            break;
+        case 4:
+            TORCH_CHECK(false, "Backward error: Gradient propagated to a SQRT node with a non-positive argument. Error code 4.");
+            break;
+        case 5:
+            TORCH_CHECK(false, "Backward error: Gradient propagated to a DIV node with a zero denominator. Error code 5.");
+            break;
+        default:
+            TORCH_CHECK(false, "Unknown backward error. Error code: ", error_flag_cpu);
+            break;
+        }
+    }
 
     return {grad_X,
             torch::Tensor(),
@@ -159,15 +194,14 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
 }
 
 // Python-facing wrapper function
-std::tuple<torch::Tensor, torch::Tensor> evaluate(
+torch::Tensor evaluate(
     torch::Tensor X,
     torch::Tensor Ops,
     torch::Tensor Ch,
-    c10::optional<torch::Tensor> C_opt)
+    torch::Tensor C)
 {
     const auto device = X.device();
-    TORCH_CHECK(Ops.device() == device && Ch.device() == device &&
-                    (!C_opt.has_value() || C_opt->device() == device),
+    TORCH_CHECK(Ops.device() == device && Ch.device() == device && C.device() == device,
                 "All input tensors must be on the same device.");
 
     const int n_x = X.size(1);
@@ -177,14 +211,11 @@ std::tuple<torch::Tensor, torch::Tensor> evaluate(
     TORCH_CHECK(Ops.size(1) == Ch.size(1), "Ops and Ch must have the same batch size (dim 1)");
     TORCH_CHECK(Ch.size(2) == MAX_ARITY, "Ch must have MaxArity as its last dimension");
 
-    // Check that X and C_opt are floating and Ch and Ops are Long tensors
+    // Check that X and C are floating and Ch and Ops are Long tensors
     TORCH_CHECK(X.scalar_type() == torch::kFloat || X.scalar_type() == torch::kDouble,
                 "X must be a floating-point tensor (float or double)");
-    if (C_opt.has_value())
-    {
-        TORCH_CHECK(C_opt->scalar_type() == torch::kFloat || C_opt->scalar_type() == torch::kDouble,
-                    "C must be a floating-point tensor (float or double)");
-    }
+    TORCH_CHECK(C.scalar_type() == torch::kFloat || C.scalar_type() == torch::kDouble,
+                "C must be a floating-point tensor (float or double)");
 
     TORCH_CHECK(Ops.scalar_type() == torch::kInt64, "Ops must be a Long tensor");
     TORCH_CHECK(Ch.scalar_type() == torch::kInt64, "Ch must be a Long tensor");
@@ -198,10 +229,13 @@ std::tuple<torch::Tensor, torch::Tensor> evaluate(
     {
         Ch = Ch.contiguous();
     }
+    if (!C.is_contiguous())
+    {
+        C = C.contiguous();
+    }
 
     validate_inputs(Ops, Ch, n_x);
 
-    torch::Tensor C;
     int64_t SC = 0;
 
     // --- Part 1: Constant Handling and posC Tensor Creation ---
@@ -209,16 +243,8 @@ std::tuple<torch::Tensor, torch::Tensor> evaluate(
     auto const_indices = (Ops == LEARNABLE_CONSTANT).nonzero();
     SC = const_indices.size(0);
 
-    if (C_opt)
-    {
-        C = *C_opt;
-        TORCH_CHECK(C.dim() == 1, "C must be a 1D tensor");
-        TORCH_CHECK(C.size(0) == SC, "The size of C must match the number of learnable constants in Ops");
-    }
-    else
-    {
-        C = torch::randn({SC}, X.options());
-    }
+    TORCH_CHECK(C.dim() == 1, "C must be a 1D tensor");
+    TORCH_CHECK(C.size(0) == SC, "The size of C must match the number of learnable constants in Ops");
 
     auto posC = torch::full_like(Ops, -1, Ops.options().dtype(torch::kInt64));
     if (SC > 0)
@@ -229,7 +255,7 @@ std::tuple<torch::Tensor, torch::Tensor> evaluate(
 
     auto result = SymbolicEvaluation::apply(X, Ops, Ch, C, posC);
 
-    return std::make_tuple(result, C);
+    return result;
 }
 
 // --- Pybind11 Bindings ---
@@ -252,5 +278,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         .value("VAR_START_ID", Operator::VAR_START_ID)
         .export_values();
 
-    m.def("evaluate", &evaluate, "Evaluate a batch of symbolic expressions.");
+    m.def("evaluate", static_cast<torch::Tensor (*)(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor)>(&evaluate), "Evaluate a batch of symbolic expressions.");
 }

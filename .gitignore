@@ -4,3 +4,7 @@ symbolic_torch.egg-info/
 .vscode/
 __pycache__/
 build/
+.vscode/settings.json
+playground.py
+test_output.log
+run.sh

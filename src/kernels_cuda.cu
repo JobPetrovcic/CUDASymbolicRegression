@@ -11,6 +11,44 @@
 constexpr size_t B_b = 16; // Tile dimension for batch
 constexpr size_t N_b = 16; // Tile dimension for data points
 
+__global__ void validate_inputs_kernel(
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    int32_t *error_flag_ptr)
+{
+    size_t m = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t b = blockIdx.y * blockDim.y + threadIdx.y;
+
+    const size_t M = ops_acc.size(0);
+    const size_t B = ops_acc.size(1);
+
+    if (m >= M || b >= B)
+        return;
+
+    int64_t op = ops_acc[m][b];
+
+    int expected_arity = get_arity(op);
+    int actual_arity = 0;
+    for (int i = 0; i < MAX_ARITY; ++i)
+    {
+        int64_t child_k = ch_acc[m][b][i];
+        if (child_k != -1)
+        {
+            actual_arity++;
+            if (child_k >= m)
+            {
+                atomicCAS(error_flag_ptr, 0, 1);
+                return;
+            }
+        }
+    }
+
+    if (actual_arity != expected_arity)
+    {
+        atomicCAS(error_flag_ptr, 0, 1);
+    }
+}
+
 template <typename scalar_t>
 __global__ void forward_step_k_kernel(
     torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
@@ -31,22 +69,26 @@ __global__ void forward_step_k_kernel(
         return;
 
     int64_t op = ops_acc[k][b_global];
+
+    if (op == NO_OP)
+    {
+        cache_acc[k][n_global][b_global] = std::numeric_limits<scalar_t>::quiet_NaN();
+        return;
+    }
+
     scalar_t arg0 = static_cast<scalar_t>(0.0);
     scalar_t arg1 = static_cast<scalar_t>(0.0);
 
-    if (op != NO_OP)
+    const int arity = get_arity(op);
+    if (arity >= 1)
     {
-        int arity = get_arity(op);
-        if (arity >= 1)
-        {
-            int64_t child0_k = ch_acc[k][b_global][0];
-            arg0 = cache_acc[child0_k][b_global][n_global];
-        }
-        if (arity == 2)
-        {
-            int64_t child1_k = ch_acc[k][b_global][1];
-            arg1 = cache_acc[child1_k][b_global][n_global];
-        }
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        arg0 = cache_acc[ch0_idx][n_global][b_global];
+    }
+    if (arity == 2)
+    {
+        int64_t ch1_idx = ch_acc[k][b_global][1];
+        arg1 = cache_acc[ch1_idx][n_global][b_global];
     }
 
     scalar_t result = static_cast<scalar_t>(0.0);
@@ -54,7 +96,8 @@ __global__ void forward_step_k_kernel(
     switch (op)
     {
     case NO_OP:
-        break; // Do nothing for NO_OP
+        result = std::numeric_limits<scalar_t>::quiet_NaN(); // Explicitly set result to NaN for NO_OP
+        break;
     case LEARNABLE_CONSTANT:
     {
         int64_t c_idx = posC_acc[k][b_global];
@@ -104,12 +147,7 @@ __global__ void forward_step_k_kernel(
         }
     }
     }
-
-    // BUG FIX: Only write to the cache if the operation was not a NO_OP.
-    if (op != NO_OP)
-    {
-        cache_acc[k][b_global][n_global] = result;
-    }
+    cache_acc[k][n_global][b_global] = result;
 }
 
 template <typename scalar_t>
@@ -121,7 +159,7 @@ __global__ void backward_step_k_kernel(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
-    size_t n_x, size_t k)
+    size_t n_x, size_t k, int32_t *error_flag_ptr)
 {
     size_t b_global = blockIdx.x * blockDim.x + threadIdx.x;
     size_t n_global = blockIdx.y * blockDim.y + threadIdx.y;
@@ -132,16 +170,36 @@ __global__ void backward_step_k_kernel(
     if (b_global >= B || n_global >= N)
         return;
 
-    scalar_t g_in = grad_cache_acc[k][b_global][n_global];
-    if (g_in == static_cast<scalar_t>(0.0))
-        return;
+    scalar_t g_in = grad_cache_acc[k][n_global][b_global];
 
     int64_t op = ops_acc[k][b_global];
+
+    // TODO
+    // Check for NaN/inf in the incoming gradient. This is an error condition.
+    //    if (isinf(g_in) || isnan(g_in))
+    //    {
+    //        atomicExch(error_flag_ptr, 1); // Use atomic exchange for error flag
+    //        return;
+    //    }
+
+    if (op == NO_OP)
+    {
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        // If we have a non-zero gradient for a NO_OP, this is an error.
+        // The forward pass should produce a zero, so the gradient should be zero unless there's a bug.
+        atomicExch(error_flag_ptr, 2);
+        return;
+    }
+
+    // If the operation is NO_OP, no gradient is needed, and g_in should be zero.
 
     switch (op)
     {
     case LEARNABLE_CONSTANT:
     {
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
         int64_t c_idx = posC_acc[k][b_global];
         if (c_idx != -1)
         {
@@ -151,124 +209,170 @@ __global__ void backward_step_k_kernel(
     }
     case SIN:
     {
-        int64_t child0_k = ch_acc[k][b_global][0];
-        scalar_t child_val = cache_acc[child0_k][b_global][n_global];
-        scalar_t grad_out = mul_wrapper(g_in, cos_wrapper(child_val));
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t g_out0 = g_in * cos_wrapper(arg0);
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
         break;
     }
     case COS:
     {
-        int64_t child0_k = ch_acc[k][b_global][0];
-        scalar_t child_val = cache_acc[child0_k][b_global][n_global];
-        scalar_t grad_out = mul_wrapper(g_in, -sin_wrapper(child_val));
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t g_out0 = g_in * -sin_wrapper(arg0);
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
+        break;
+    }
+    case EXP:
+    {
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        scalar_t out_val = cache_acc[k][n_global][b_global]; // Use cached value
+        scalar_t g_out0 = g_in * out_val;
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
+        break;
+    }
+    case LOG:
+    {
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t g_out0;
+        if (arg0 <= static_cast<scalar_t>(0.0))
+        {
+            atomicExch(error_flag_ptr, 3); // Error code 3 for gradient on invalid log
+            g_out0 = static_cast<scalar_t>(0.0);
+        }
+        else
+        {
+            g_out0 = div_wrapper(g_in, arg0);
+        }
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
         break;
     }
     case MUL:
     {
-        int64_t child0_k = ch_acc[k][b_global][0];
-        int64_t child1_k = ch_acc[k][b_global][1];
-        scalar_t child0_val = cache_acc[child0_k][b_global][n_global];
-        scalar_t child1_val = cache_acc[child1_k][b_global][n_global];
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], mul_wrapper(g_in, child1_val));
-        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], mul_wrapper(g_in, child0_val));
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        int64_t ch1_idx = ch_acc[k][b_global][1];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t arg1 = cache_acc[ch1_idx][n_global][b_global];
+        scalar_t g_out0 = g_in * arg1;
+        scalar_t g_out1 = g_in * arg0;
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
+        gpuAtomicAdd(&grad_cache_acc[ch1_idx][n_global][b_global], g_out1);
         break;
     }
     case ADD:
     {
-        int64_t child0_k = ch_acc[k][b_global][0];
-        int64_t child1_k = ch_acc[k][b_global][1];
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], g_in);
-        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], g_in);
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        int64_t ch1_idx = ch_acc[k][b_global][1];
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_in);
+        gpuAtomicAdd(&grad_cache_acc[ch1_idx][n_global][b_global], g_in);
         break;
     }
     case SUB:
     {
-        int64_t child0_k = ch_acc[k][b_global][0];
-        int64_t child1_k = ch_acc[k][b_global][1];
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], g_in);
-        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], -g_in);
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        int64_t ch1_idx = ch_acc[k][b_global][1];
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_in);
+        gpuAtomicAdd(&grad_cache_acc[ch1_idx][n_global][b_global], -g_in);
         break;
     }
     case DIV:
     {
-        int64_t child0_k = ch_acc[k][b_global][0];
-        int64_t child1_k = ch_acc[k][b_global][1];
-        scalar_t child0_val = cache_acc[child0_k][b_global][n_global];
-        scalar_t child1_val = cache_acc[child1_k][b_global][n_global];
-        scalar_t grad_out0 = div_wrapper(g_in, child1_val);
-        scalar_t grad_out1 = mul_wrapper(g_in, div_wrapper(-child0_val, mul_wrapper(child1_val, child1_val)));
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out0);
-        gpuAtomicAdd(&grad_cache_acc[child1_k][b_global][n_global], grad_out1);
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        int64_t ch1_idx = ch_acc[k][b_global][1];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t arg1 = cache_acc[ch1_idx][n_global][b_global];
+        scalar_t g_out0, g_out1;
+        if (arg1 == static_cast<scalar_t>(0.0))
+        {
+            atomicExch(error_flag_ptr, 5); // Error code 5 for gradient on invalid div
+            g_out0 = static_cast<scalar_t>(0.0);
+            g_out1 = static_cast<scalar_t>(0.0);
+        }
+        else
+        {
+            g_out0 = g_in / arg1;
+            g_out1 = -g_in * arg0 / (arg1 * arg1);
+        }
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
+        gpuAtomicAdd(&grad_cache_acc[ch1_idx][n_global][b_global], g_out1);
         break;
     }
     case SQUARE:
     {
-        int64_t child0_k = ch_acc[k][b_global][0];
-        scalar_t child_val = cache_acc[child0_k][b_global][n_global];
-        scalar_t grad_out = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(2.0), child_val));
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t g_out0 = g_in * 2 * arg0;
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
         break;
     }
     case SQRT:
     {
-        scalar_t out_val = cache_acc[k][b_global][n_global];
-        scalar_t grad_out = div_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(2.0), out_val));
-        int64_t child0_k = ch_acc[k][b_global][0];
-        gpuAtomicAdd(&grad_cache_acc[child0_k][b_global][n_global], grad_out);
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t g_out0;
+
+        // TODO: think this through again
+        // The commented-out code is consistent with the logic that if the g_in is zero, then the g_out0 should also be zero.
+        // However, this is not consistent with pytorch's behavior, which returns NaN for gradients of sqrt at negative numbers even if g_in is zero.
+
+        // if (g_in == static_cast<scalar_t>(0.0)) return;
+        // if (arg0 <= static_cast<scalar_t>(0.0))
+        //{
+        //     atomicExch(error_flag_ptr, 4); // Error code 4 for gradient on invalid sqrt
+        //     g_out0 = static_cast<scalar_t>(0.0);
+        // }
+        // else
+        //{
+        //     g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
+        // }
+
+        if (g_in == static_cast<scalar_t>(0.0))
+            g_out0 = std::numeric_limits<scalar_t>::quiet_NaN(); // Return NaN for zero gradient
+        else
+        {
+            if (arg0 <= static_cast<scalar_t>(0.0))
+            {
+                atomicExch(error_flag_ptr, 4);       // Error code 4 for gradient on invalid sqrt
+                g_out0 = static_cast<scalar_t>(0.0); // Return NaN for invalid sqrt
+            }
+            else
+            {
+                g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
+            }
+        }
+
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
         break;
     }
     default:
     {
+        if (g_in == static_cast<scalar_t>(0.0))
+            return;
         if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
         {
             size_t var_idx = op - VAR_START_ID;
             gpuAtomicAdd(&grad_x_acc[n_global][var_idx], g_in);
         }
     }
-    }
-}
-
-__global__ void validate_inputs_kernel(
-    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
-    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
-    int32_t *error_flag_ptr)
-{
-    size_t m = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t b = blockIdx.y * blockDim.y + threadIdx.y;
-
-    const size_t M = ops_acc.size(0);
-    const size_t B = ops_acc.size(1);
-
-    if (m >= M || b >= B)
-        return;
-
-    // Ensure only one thread can set the error flag
-    if (atomicCAS(error_flag_ptr, 0, 0) != 0)
-        return;
-
-    int64_t op = ops_acc[m][b];
-
-    int expected_arity = get_arity(op);
-    int actual_arity = 0;
-    for (int i = 0; i < MAX_ARITY; ++i)
-    {
-        int64_t child_k = ch_acc[m][b][i];
-        if (child_k != -1)
-        {
-            actual_arity++;
-            if (child_k >= m)
-            {
-                atomicCAS(error_flag_ptr, 0, 1);
-                return;
-            }
-        }
-    }
-
-    if (actual_arity != expected_arity)
-    {
-        atomicCAS(error_flag_ptr, 0, 1);
     }
 }
 
@@ -302,7 +406,7 @@ void backward_step_k_cuda_impl(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k)
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr)
 {
     const int64_t B = ops_acc.size(1);
     const int64_t N = grad_x_acc.size(0);
@@ -311,7 +415,7 @@ void backward_step_k_cuda_impl(
                    (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
-        grad_cache_acc, grad_c_acc, grad_x_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k);
+        grad_cache_acc, grad_c_acc, grad_x_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -358,7 +462,7 @@ template __global__ void backward_step_k_kernel<float>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
-    size_t n_x, size_t k);
+    size_t n_x, size_t k, int32_t *error_flag_ptr);
 
 template __global__ void backward_step_k_kernel<double>(
     torch::PackedTensorAccessor64<double, 3> grad_cache_acc,
@@ -368,7 +472,7 @@ template __global__ void backward_step_k_kernel<double>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
-    size_t n_x, size_t k);
+    size_t n_x, size_t k, int32_t *error_flag_ptr);
 
 // Explicit template instantiation for scalar types
 template void forward_step_k_cuda_impl<float>(
@@ -388,7 +492,7 @@ template void backward_step_k_cuda_impl<float>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k);
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr);
 
 template void forward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<double, 3> cache_acc,
@@ -407,4 +511,4 @@ template void backward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k);
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr);

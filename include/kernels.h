@@ -22,7 +22,7 @@ void backward_step_k_cpu_impl(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     torch::TensorAccessor<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k);
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr);
 
 template <typename scalar_t>
 void forward_step_k_cuda_impl(
@@ -43,7 +43,7 @@ void backward_step_k_cuda_impl(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k);
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr);
 
 void validate_inputs_cuda_impl(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,

@@ -2,9 +2,54 @@
 #include "operators.h"
 #include <omp.h>  // For CPU parallelization
 #include <atomic> // For std::atomic_exchange
+// --- Input Validation Implementation (CPU) ---
+void validate_inputs_cpu_impl(
+    torch::TensorAccessor<int64_t, 2> ops_acc,
+    torch::TensorAccessor<int64_t, 3> ch_acc,
+    int32_t *error_flag_ptr)
+{
+    const int64_t M = ops_acc.size(0);
+    const int64_t B = ops_acc.size(1);
+
+#pragma omp parallel for collapse(2)
+    for (int64_t m = 0; m < M; ++m)
+    {
+        for (int64_t b = 0; b < B; ++b)
+        {
+            if (*error_flag_ptr != 0)
+            {
+                continue; // Another thread found an error, so we can stop.
+            }
+
+            const int op = ops_acc[m][b];
+
+            const int expected_arity = get_arity(op);
+            int actual_arity = 0;
+            for (size_t i = 0; i < MAX_ARITY; ++i)
+            {
+                const int64_t child_k = ch_acc[m][b][i];
+                if (child_k != -1)
+                {
+                    actual_arity++;
+                    if (child_k >= m)
+                    {
+                        // Atomically set the error flag
+                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 1);
+                        goto next_iter;
+                    }
+                }
+            }
+            if (actual_arity != expected_arity)
+            {
+                // Atomically set the error flag
+                std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 1);
+            }
+        next_iter:;
+        }
+    }
+}
 
 // --- Forward Pass Implementation (CPU) ---
-
 template <typename scalar_t>
 void forward_step_k_cpu_impl(
     torch::TensorAccessor<scalar_t, 3> cache_acc,
@@ -20,15 +65,16 @@ void forward_step_k_cpu_impl(
 
 // Parallelize the loops over the batch (B) and data (N) dimensions
 #pragma omp parallel for collapse(2)
-    for (int64_t b = 0; b < B; ++b)
+    for (int64_t n = 0; n < N;
+         ++n)
     {
-        for (int64_t n = 0; n < N; ++n)
+        for (int64_t b = 0; b < B; ++b)
         {
             const int op = ops_acc[k][b];
 
-            // Skip NO_OP entirely, leaving the cache value unchanged.
             if (op == NO_OP)
             {
+                cache_acc[k][n][b] = std::numeric_limits<scalar_t>::quiet_NaN();
                 continue;
             }
 
@@ -38,13 +84,13 @@ void forward_step_k_cpu_impl(
             const int arity = get_arity(op);
             if (arity >= 1)
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                arg0 = cache_acc[child0_k][b][n];
+                int64_t ch0_idx = ch_acc[k][b][0];
+                arg0 = cache_acc[ch0_idx][n][b];
             }
             if (arity == 2)
             {
-                int64_t child1_k = ch_acc[k][b][1];
-                arg1 = cache_acc[child1_k][b][n];
+                int64_t ch1_idx = ch_acc[k][b][1];
+                arg1 = cache_acc[ch1_idx][n][b];
             }
 
             scalar_t result = static_cast<scalar_t>(0.0);
@@ -94,12 +140,11 @@ void forward_step_k_cpu_impl(
             {
                 if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
                 {
-                    size_t var_idx = op - VAR_START_ID;
-                    result = x_acc[n][var_idx];
+                    result = x_acc[n][op - VAR_START_ID];
                 }
             }
             }
-            cache_acc[k][b][n] = result;
+            cache_acc[k][n][b] = result;
         }
     }
 }
@@ -115,30 +160,39 @@ void backward_step_k_cpu_impl(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     torch::TensorAccessor<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k)
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr)
 {
     const int64_t B = ops_acc.size(1);
     const int64_t N = grad_x_acc.size(0);
 
 #pragma omp parallel for collapse(2)
-    for (int64_t b = 0; b < B; ++b)
+    for (int64_t n = 0; n < N; ++n)
     {
-        for (int64_t n = 0; n < N; ++n)
+        for (int64_t b = 0; b < B; ++b)
         {
-            const scalar_t g_in = grad_cache_acc[k][b][n];
+            if (*error_flag_ptr != 0)
+                continue; // Error already flagged
+            scalar_t g_in = grad_cache_acc[k][n][b];
 
-            // Optimization: if incoming gradient is zero, no work to do.
-            if (g_in == static_cast<scalar_t>(0.0))
-            {
-                continue;
-            }
+            // If the operation is NO_OP, no gradient is needed, and g_in should be zero.
 
             const int op = ops_acc[k][b];
+
+            if (op == NO_OP)
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                // g_in should be 0 for NO_OP. If it's not, it's an error.
+                std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 2); // Error code 2 for gradient on NO_OP
+                continue;
+            }
 
             switch (op)
             {
             case LEARNABLE_CONSTANT:
             {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
                 int64_t c_idx = posC_acc[k][b];
                 if (c_idx != -1)
                 {
@@ -149,144 +203,184 @@ void backward_step_k_cpu_impl(
             }
             case SIN:
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                scalar_t child_val = cache_acc[child0_k][b][n];
-                scalar_t grad_out = mul_wrapper(g_in, cos_wrapper(child_val));
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, cos_wrapper(arg0));
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += grad_out;
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
                 break;
             }
             case COS:
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                scalar_t child_val = cache_acc[child0_k][b][n];
-                scalar_t grad_out = mul_wrapper(g_in, -cos_wrapper(child_val));
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, -sin_wrapper(arg0));
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += grad_out;
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case EXP:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, exp_wrapper(arg0));
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case LOG:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+
+                scalar_t g_out0;
+                if (arg0 <= static_cast<scalar_t>(0.0))
+                {
+                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 3); // Error code 3 for gradient on invalid log
+                    g_out0 = static_cast<scalar_t>(0.0);
+                }
+                else
+                {
+                    g_out0 = div_wrapper(g_in, arg0);
+                }
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
                 break;
             }
             case SQUARE:
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                scalar_t child_val = cache_acc[child0_k][b][n];
-                scalar_t grad_out = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(2.0), child_val));
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(2.0), arg0));
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += grad_out;
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
                 break;
             }
             case SQRT:
             {
-                scalar_t out_val = cache_acc[k][b][n];
-                scalar_t grad_out = div_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(2.0), out_val));
-                int64_t child0_k = ch_acc[k][b][0];
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0;
+                // The commented-out code is consistent with the logic that if the g_in is zero, then the g_out0 should also be zero.
+                // However, this is not consistent with pytorch's behavior, which returns NaN for gradients of sqrt at negative numbers even if g_in is zero.
+
+                //                if (arg0 <= static_cast<scalar_t>(0.0))
+                //                {
+                //                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 4); // Error code 4 for gradient on invalid sqrt
+                //                    g_out0 = static_cast<scalar_t>(0.0);
+                //                }
+                //                else
+                //                {
+                //                    g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
+                //                }
+                if (g_in == static_cast<scalar_t>(0.0))
+                {
+                    g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                }
+                else
+                {
+                    if (arg0 <= static_cast<scalar_t>(0.0))
+                    {
+                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 4); // Error code 4 for gradient on invalid sqrt
+                        g_out0 = static_cast<scalar_t>(0.0);
+                    }
+                    else
+                    {
+                        g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
+                    }
+                }
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += grad_out;
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
                 break;
             }
             case ADD:
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                int64_t child1_k = ch_acc[k][b][1];
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                int64_t ch1_idx = ch_acc[k][b][1];
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += g_in;
+                grad_cache_acc[ch0_idx][n][b] += g_in;
 #pragma omp atomic
-                grad_cache_acc[child1_k][b][n] += g_in;
+                grad_cache_acc[ch1_idx][n][b] += g_in;
                 break;
             }
             case SUB:
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                int64_t child1_k = ch_acc[k][b][1];
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                int64_t ch1_idx = ch_acc[k][b][1];
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += g_in;
+                grad_cache_acc[ch0_idx][n][b] += g_in;
 #pragma omp atomic
-                grad_cache_acc[child1_k][b][n] -= g_in;
+                grad_cache_acc[ch1_idx][n][b] -= g_in;
                 break;
             }
             case MUL:
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                int64_t child1_k = ch_acc[k][b][1];
-                scalar_t child0_val = cache_acc[child0_k][b][n];
-                scalar_t child1_val = cache_acc[child1_k][b][n];
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                int64_t ch1_idx = ch_acc[k][b][1];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t arg1 = cache_acc[ch1_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, arg1);
+                scalar_t g_out1 = mul_wrapper(g_in, arg0);
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += mul_wrapper(g_in, child1_val);
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
 #pragma omp atomic
-                grad_cache_acc[child1_k][b][n] += mul_wrapper(g_in, child0_val);
+                grad_cache_acc[ch1_idx][n][b] += g_out1;
                 break;
             }
             case DIV:
             {
-                int64_t child0_k = ch_acc[k][b][0];
-                int64_t child1_k = ch_acc[k][b][1];
-                scalar_t child0_val = cache_acc[child0_k][b][n];
-                scalar_t child1_val = cache_acc[child1_k][b][n];
-                scalar_t grad_out0 = div_wrapper(g_in, child1_val);
-                scalar_t grad_out1 = mul_wrapper(g_in, div_wrapper(-child0_val, mul_wrapper(child1_val, child1_val)));
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                int64_t ch1_idx = ch_acc[k][b][1];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t arg1 = cache_acc[ch1_idx][n][b];
+                scalar_t g_out0, g_out1;
+                if (arg1 == static_cast<scalar_t>(0.0))
+                {
+                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 5); // Error code 5 for gradient on invalid div
+                    g_out0 = static_cast<scalar_t>(0.0);
+                    g_out1 = static_cast<scalar_t>(0.0);
+                }
+                else
+                {
+                    g_out0 = div_wrapper(g_in, arg1);
+                    g_out1 = div_wrapper(-g_in * arg0, (arg1 * arg1));
+                }
 #pragma omp atomic
-                grad_cache_acc[child0_k][b][n] += grad_out0;
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
 #pragma omp atomic
-                grad_cache_acc[child1_k][b][n] += grad_out1;
+                grad_cache_acc[ch1_idx][n][b] += g_out1;
                 break;
             }
             default:
             {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
                 if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
                 {
-                    size_t var_idx = op - VAR_START_ID;
+                    int64_t x_idx = op - VAR_START_ID;
 #pragma omp atomic
-                    grad_x_acc[n][var_idx] += g_in;
+                    grad_x_acc[n][x_idx] += g_in;
                 }
             }
             }
-        }
-    }
-}
-
-// --- Input Validation Implementation (CPU) ---
-
-void validate_inputs_cpu_impl(
-    torch::TensorAccessor<int64_t, 2> ops_acc,
-    torch::TensorAccessor<int64_t, 3> ch_acc,
-    int32_t *error_flag_ptr)
-{
-    const int64_t M = ops_acc.size(0);
-    const int64_t B = ops_acc.size(1);
-
-#pragma omp parallel for collapse(2)
-    for (int64_t m = 0; m < M; ++m)
-    {
-        for (int64_t b = 0; b < B; ++b)
-        {
-            if (*error_flag_ptr != 0)
-            {
-                continue; // Another thread found an error, so we can stop.
-            }
-
-            const int op = ops_acc[m][b];
-
-            const int expected_arity = get_arity(op);
-            int actual_arity = 0;
-            for (size_t i = 0; i < MAX_ARITY; ++i)
-            {
-                const int64_t child_k = ch_acc[m][b][i];
-                if (child_k != -1)
-                {
-                    actual_arity++;
-                    if (child_k >= m)
-                    {
-                        // Atomically set the error flag
-                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 1);
-                        goto next_iter;
-                    }
-                }
-            }
-            if (actual_arity != expected_arity)
-            {
-                // Atomically set the error flag
-                std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 1);
-            }
-        next_iter:;
         }
     }
 }
@@ -309,7 +403,7 @@ template void backward_step_k_cpu_impl<float>(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     torch::TensorAccessor<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k);
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr);
 
 template void forward_step_k_cpu_impl<double>(
     torch::TensorAccessor<double, 3> cache_acc,
@@ -328,4 +422,4 @@ template void backward_step_k_cpu_impl<double>(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     torch::TensorAccessor<int64_t, 2> posC_acc,
-    int64_t n_x, int64_t k);
+    int64_t n_x, int64_t k, int32_t *error_flag_ptr);

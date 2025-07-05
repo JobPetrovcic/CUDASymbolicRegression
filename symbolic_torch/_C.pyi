@@ -25,7 +25,7 @@ def evaluate(
     Ops: torch.Tensor,
     Ch: torch.Tensor,
     C: Optional[torch.Tensor] = None
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor:
     """
     Let M be the maximum number of operations in an expression, B the batch size of the expressions, N the number of datapoints, and n_x the number of variables in the expressions. 
 
@@ -35,5 +35,7 @@ def evaluate(
     Ops: Tensor of operations specified by integers (see Operator Enum) of shape (M, B) for the expressions in postfix order. If some operations are not used, they can be set to NO_OP.
     Ch: Tensor of postfix order indices for the children of nodes in th expressions of shape (M, B). If the operation has less than MAX_ARITY = 2 children, the unused children must be set to -1.
     C: Optional tensor of learnable constants of shape (M, B). If not provided, it is initialized using the default normal distribution with mean 0 and standard deviation 1.
+    
+    TODO
     """
     ...
