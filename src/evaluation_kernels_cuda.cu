@@ -1,9 +1,7 @@
-#include "kernels.h"
+#include "evaluation_kernels.h"
 #include "operators.h"
 #include <ATen/native/cuda/Loops.cuh>
 #include <ATen/cuda/Atomic.cuh>
-
-// TODO: faster memory loading in kernels
 
 // --- CUDA Kernel Definitions ---
 
@@ -32,7 +30,7 @@ __global__ void validate_inputs_kernel(
     for (int i = 0; i < MAX_ARITY; ++i)
     {
         int64_t child_k = ch_acc[m][b][i];
-        if (child_k != -1)
+        if (child_k != NULL_CHILD)
         {
             actual_arity++;
             if (child_k >= m)
@@ -50,7 +48,7 @@ __global__ void validate_inputs_kernel(
 }
 
 template <typename scalar_t>
-__global__ void forward_step_k_kernel(
+__global__ void evaluation_forward_step_k_kernel(
     torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
@@ -101,7 +99,7 @@ __global__ void forward_step_k_kernel(
     case LEARNABLE_CONSTANT:
     {
         int64_t c_idx = posC_acc[k][b_global];
-        if (c_idx != -1)
+        if (c_idx != NULL_CHILD)
             result = c_acc[c_idx];
         break;
     }
@@ -151,7 +149,7 @@ __global__ void forward_step_k_kernel(
 }
 
 template <typename scalar_t>
-__global__ void backward_step_k_kernel(
+__global__ void evaluation_backward_step_k_kernel(
     torch::PackedTensorAccessor64<scalar_t, 3> grad_cache_acc,
     torch::PackedTensorAccessor64<scalar_t, 1> grad_c_acc,
     torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
@@ -201,7 +199,7 @@ __global__ void backward_step_k_kernel(
         if (g_in == static_cast<scalar_t>(0.0))
             return;
         int64_t c_idx = posC_acc[k][b_global];
-        if (c_idx != -1)
+        if (c_idx != NULL_CHILD)
         {
             gpuAtomicAdd(&grad_c_acc[c_idx], g_in);
         }
@@ -377,7 +375,7 @@ __global__ void backward_step_k_kernel(
 }
 
 template <typename scalar_t>
-void forward_step_k_cuda_impl(
+void evaluation_forward_step_k_cuda_impl(
     torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
@@ -392,13 +390,13 @@ void forward_step_k_cuda_impl(
     dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
                    (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-    forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
+    evaluation_forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
         cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 template <typename scalar_t>
-void backward_step_k_cuda_impl(
+void evaluation_backward_step_k_cuda_impl(
     torch::PackedTensorAccessor64<scalar_t, 3> grad_cache_acc,
     torch::PackedTensorAccessor64<scalar_t, 1> grad_c_acc,
     torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
@@ -414,7 +412,7 @@ void backward_step_k_cuda_impl(
     dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
                    (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-    backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
+    evaluation_backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
         grad_cache_acc, grad_c_acc, grad_x_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
@@ -436,7 +434,7 @@ void validate_inputs_cuda_impl(
 }
 
 // Explicitly instantiate templates for float and double
-template __global__ void forward_step_k_kernel<float>(
+template __global__ void evaluation_forward_step_k_kernel<float>(
     torch::PackedTensorAccessor64<float, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
@@ -445,7 +443,7 @@ template __global__ void forward_step_k_kernel<float>(
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     size_t n_x, size_t k);
 
-template __global__ void forward_step_k_kernel<double>(
+template __global__ void evaluation_forward_step_k_kernel<double>(
     torch::PackedTensorAccessor64<double, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
@@ -454,7 +452,7 @@ template __global__ void forward_step_k_kernel<double>(
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     size_t n_x, size_t k);
 
-template __global__ void backward_step_k_kernel<float>(
+template __global__ void evaluation_backward_step_k_kernel<float>(
     torch::PackedTensorAccessor64<float, 3> grad_cache_acc,
     torch::PackedTensorAccessor64<float, 1> grad_c_acc,
     torch::PackedTensorAccessor64<float, 2> grad_x_acc,
@@ -464,7 +462,7 @@ template __global__ void backward_step_k_kernel<float>(
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     size_t n_x, size_t k, int32_t *error_flag_ptr);
 
-template __global__ void backward_step_k_kernel<double>(
+template __global__ void evaluation_backward_step_k_kernel<double>(
     torch::PackedTensorAccessor64<double, 3> grad_cache_acc,
     torch::PackedTensorAccessor64<double, 1> grad_c_acc,
     torch::PackedTensorAccessor64<double, 2> grad_x_acc,
@@ -475,7 +473,7 @@ template __global__ void backward_step_k_kernel<double>(
     size_t n_x, size_t k, int32_t *error_flag_ptr);
 
 // Explicit template instantiation for scalar types
-template void forward_step_k_cuda_impl<float>(
+template void evaluation_forward_step_k_cuda_impl<float>(
     torch::PackedTensorAccessor64<float, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
@@ -484,7 +482,7 @@ template void forward_step_k_cuda_impl<float>(
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k);
 
-template void backward_step_k_cuda_impl<float>(
+template void evaluation_backward_step_k_cuda_impl<float>(
     torch::PackedTensorAccessor64<float, 3> grad_cache_acc,
     torch::PackedTensorAccessor64<float, 1> grad_c_acc,
     torch::PackedTensorAccessor64<float, 2> grad_x_acc,
@@ -494,7 +492,7 @@ template void backward_step_k_cuda_impl<float>(
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr);
 
-template void forward_step_k_cuda_impl<double>(
+template void evaluation_forward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<double, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
@@ -503,7 +501,7 @@ template void forward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k);
 
-template void backward_step_k_cuda_impl<double>(
+template void evaluation_backward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<double, 3> grad_cache_acc,
     torch::PackedTensorAccessor64<double, 1> grad_c_acc,
     torch::PackedTensorAccessor64<double, 2> grad_x_acc,

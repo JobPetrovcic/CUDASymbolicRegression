@@ -8,3 +8,5 @@ build/
 playground.py
 test_output.log
 run.sh
+run_tests.sh
+.vscode/settings.json

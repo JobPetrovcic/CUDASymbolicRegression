@@ -69,7 +69,7 @@ torch::Tensor SymbolicEvaluation::forward(
             auto posC_acc = posC.packed_accessor64<int64_t, 2>();
             for (int64_t k = 0; k < M; ++k)
             {
-                forward_step_k_cuda_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
+                evaluation_forward_step_k_cuda_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
             }
         }
         else
@@ -82,7 +82,7 @@ torch::Tensor SymbolicEvaluation::forward(
             auto posC_acc = posC.accessor<int64_t, 2>();
             for (int64_t k = 0; k < M; ++k)
             {
-                forward_step_k_cpu_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
+                evaluation_forward_step_k_cpu_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
             }
         } }));
 
@@ -139,7 +139,7 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
             auto posC_acc = posC.packed_accessor64<int64_t, 2>();
             for (int64_t k = M - 1; k >= 0; --k)
             {
-                backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
+                evaluation_backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
             }
         }
         else
@@ -153,12 +153,11 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
             auto posC_acc = posC.accessor<int64_t, 2>();
             for (int64_t k = M - 1; k >= 0; --k)
             {
-                backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
+                evaluation_backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
             }
         } }));
 
     int32_t error_flag_cpu = error_flag_tensor.item<int32_t>();
-    std::cout << "Backward error flag: " << error_flag_cpu << std::endl;
 
     // Check for errors from the backward pass
     if (error_flag_cpu != 0)
@@ -246,7 +245,7 @@ torch::Tensor evaluate(
     TORCH_CHECK(C.dim() == 1, "C must be a 1D tensor");
     TORCH_CHECK(C.size(0) == SC, "The size of C must match the number of learnable constants in Ops");
 
-    auto posC = torch::full_like(Ops, -1, Ops.options().dtype(torch::kInt64));
+    auto posC = torch::zeros_like(Ops, Ops.options().dtype(torch::kInt64));
     if (SC > 0)
     {
         posC.index_put_({const_indices.select(1, 0), const_indices.select(1, 1)},
@@ -258,8 +257,7 @@ torch::Tensor evaluate(
     return result;
 }
 
-// --- Pybind11 Bindings ---
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+void init_symbolic_evaluation(pybind11::module &m)
 {
     pybind11::enum_<Operator>(m, "Operator", "Enum for symbolic operations")
         .value("NO_OP", Operator::NO_OP)

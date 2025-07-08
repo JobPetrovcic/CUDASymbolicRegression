@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <cmath>
@@ -40,6 +39,8 @@ enum Operator : int
 constexpr size_t MAX_ARITY = 2;
 constexpr size_t MAX_VARS = 30; // Max number of X variables
 
+constexpr int64_t NULL_CHILD = -1;
+
 C10_HOST_DEVICE inline int get_arity(int op)
 {
     if (op >= SIN && op <= SQRT)
@@ -47,6 +48,26 @@ C10_HOST_DEVICE inline int get_arity(int op)
     if (op >= ADD && op <= DIV)
         return 2;
     return 0;
+}
+
+C10_HOST_DEVICE inline bool is_constant(int op)
+{
+    return (op >= CONST_1 && op < SIN);
+}
+
+C10_HOST_DEVICE inline bool is_unary(int op)
+{
+    return get_arity(op) == 1;
+}
+
+C10_HOST_DEVICE inline bool is_binary(int op)
+{
+    return get_arity(op) == 2;
+}
+
+C10_HOST_DEVICE inline bool is_right_associative(int op)
+{
+    return is_unary(op);
 }
 
 // --- Wrappers with Strict Domain Checking ---

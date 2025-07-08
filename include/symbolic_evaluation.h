@@ -3,7 +3,7 @@
 #include <torch/extension.h>
 #include <vector>
 #include "operators.h"
-#include "kernels.h"
+#include "evaluation_kernels.h"
 
 // --- Helper Functions ---
 void validate_inputs(const torch::Tensor &Ops, const torch::Tensor &Ch, int n_x);

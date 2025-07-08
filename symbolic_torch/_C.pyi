@@ -34,8 +34,27 @@ def evaluate(
     X: Input tensor for the variables of shape (
     Ops: Tensor of operations specified by integers (see Operator Enum) of shape (M, B) for the expressions in postfix order. If some operations are not used, they can be set to NO_OP.
     Ch: Tensor of postfix order indices for the children of nodes in th expressions of shape (M, B). If the operation has less than MAX_ARITY = 2 children, the unused children must be set to -1.
-    C: Optional tensor of learnable constants of shape (M, B). If not provided, it is initialized using the default normal distribution with mean 0 and standard deviation 1.
+    C: tensor of learnable constants of shape (SC) where SC is the number of learnable constants used in Ops. 
     
     TODO
     """
     ...
+
+class ProbababilisticContextFreeGrammar:
+    def __init__(
+        self,
+        grammar: str,
+        start_symbol: str,
+        padded_maximum_length: int,
+        n_variables: int,
+        device: torch.device,
+        max_tries: int = 64,
+        tolerance: float = 1e-8,
+    ) -> None:
+        ...
+    def sample(self, B: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        ...
+    def sample_string_expression(self, B: int) -> torch.Tensor:
+        ...
+    def to_string(self, expressions: torch.Tensor) -> list[str]:
+        ...
