@@ -33,12 +33,14 @@ public:
     - It sorts rules by non-terminal to group them.
     - It computes the final pointer (`_ptr`) and cumulative probability (`_cum_probs`) tensors.
     */
-    ProbababilisticContextFreeGrammar(std::string grammar, std::string start_symbol, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries = 100, float tolerance = DEFAULT_tolerence);
+    ProbababilisticContextFreeGrammar(std::string grammar, std::string start_symbol, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries = 100, float tolerance = DEFAULT_tolerence, bool verbose = false);
     ~ProbababilisticContextFreeGrammar();
     std::tuple<torch::Tensor, torch::Tensor> sample(int64_t B);
     torch::Tensor sample_string_expression(int64_t B);
     std::vector<std::string> to_string(torch::Tensor expressions);
     std::tuple<torch::Tensor, torch::Tensor> parse_to_postfix(torch::Tensor expressions);
+
+    torch::Device device;
 
 private:
     std::string start_symbol;
@@ -50,6 +52,7 @@ private:
     int64_t new_symbol_id_t;
 
     float tolerance;
+    bool verbose;
 
     std::unordered_map<std::string, int64_t> symbol_to_id;
     std::unordered_map<int64_t, std::string> id_to_symbol;
@@ -57,7 +60,7 @@ private:
     void add_symbol(const std::string &s, int64_t id);
     void get_initial_symbol_map_and_precedence(int64_t n_variables);
     int64_t get_token_id(std::string s);
-    std::vector<int64_t> parse_sides(std::string s);
+    std::vector<int64_t> parse_sides(std::string s, std::string line);
 
     torch::Tensor id_to_pos;
     torch::Tensor rule_lhs;          // Shape: (num_rules,)
@@ -66,6 +69,4 @@ private:
     torch::Tensor nt_rule_ptr;       // Shape: (num_symbols + 1,)
     torch::Tensor nt_rule_cum_probs; // Shape: (num_rules,)
     torch::Tensor precedence;        // Shape: (num_symbols,)
-
-    torch::Device device;
 };

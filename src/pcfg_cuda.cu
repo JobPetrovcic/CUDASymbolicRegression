@@ -4,7 +4,7 @@
 #include <cuda.h>
 #include <curand_kernel.h>
 
-constexpr int64_t THREAD_COUNT = 256;
+constexpr int THREAD_COUNT = 256;
 
 __global__ void pcfg_sample_string_expression_kernel(
     const torch::PackedTensorAccessor32<int64_t, 1> rule_lhs,
@@ -20,7 +20,7 @@ __global__ void pcfg_sample_string_expression_kernel(
     const torch::PackedTensorAccessor32<int64_t, 1> seeds,
     int64_t B)
 {
-    int b = blockIdx.x * blockDim.x + threadIdx.x;
+    int32_t b = blockIdx.x * blockDim.x + threadIdx.x;
     if (b >= B)
         return;
 
@@ -30,25 +30,25 @@ __global__ void pcfg_sample_string_expression_kernel(
     curand_init(seeds[b], 0, 0, &state);
 
     bool generated_successfully = false;
-    for (int t = 0; t < max_tries; ++t)
+    for (int32_t t = 0; t < max_tries; ++t)
     {
         bool should_restart = false;
-        int64_t stack[HARD_MAX_LENGTH];
-        int stack_ptr = 0;
+        int32_t stack[HARD_MAX_LENGTH];
+        int32_t stack_ptr = 0;
         stack[stack_ptr++] = start_symbol_id;
 
-        int out_ptr = 0;
+        int32_t out_ptr = 0;
 
         while (stack_ptr > 0)
         {
-            int64_t current_symbol = stack[--stack_ptr];
-            const int64_t rule_start = nt_rule_ptr[current_symbol];
-            const int64_t rule_end = nt_rule_ptr[current_symbol + 1];
+            int32_t current_symbol = stack[--stack_ptr];
+            const int32_t rule_start = nt_rule_ptr[current_symbol];
+            const int32_t rule_end = nt_rule_ptr[current_symbol + 1];
             if (rule_start != rule_end)
             { // Non-terminal
                 float rand_val = curand_uniform(&state);
-                int64_t chosen_rule = INVALID_RULE;
-                for (int64_t r = rule_start; r < rule_end; ++r)
+                int32_t chosen_rule = INVALID_RULE;
+                for (int32_t r = rule_start; r < rule_end; ++r)
                 {
                     if (rand_val <= nt_rule_cum_probs[r])
                     {
@@ -62,9 +62,9 @@ __global__ void pcfg_sample_string_expression_kernel(
                     break;
                 }
 
-                int64_t rhs_start = rhs_ptr[chosen_rule];
-                int64_t rhs_end = rhs_ptr[chosen_rule + 1];
-                for (int64_t i = rhs_end - 1; i >= rhs_start; --i)
+                int32_t rhs_start = rhs_ptr[chosen_rule];
+                int32_t rhs_end = rhs_ptr[chosen_rule + 1];
+                for (int32_t i = rhs_end - 1; i >= rhs_start; --i)
                 {
                     if (stack_ptr >= max_length)
                     {
@@ -100,7 +100,7 @@ __global__ void pcfg_sample_string_expression_kernel(
         if (stack_ptr == 0 && out_ptr > 0)
         {
             // Successfully generated an expression
-            for (int i = out_ptr; i < max_length; ++i)
+            for (int32_t i = out_ptr; i < max_length; ++i)
             {
                 output[b][i] = NO_OP; // padding
             }
@@ -157,19 +157,19 @@ __global__ void parse_to_postfix_kernel(
     int64_t B,
     int64_t M)
 {
-    int b = blockIdx.x * blockDim.x + threadIdx.x;
+    int32_t b = blockIdx.x * blockDim.x + threadIdx.x;
     if (b >= B)
         return;
 
     errors[b] = 0;
-    int64_t op_stack[HARD_MAX_LENGTH];
-    int op_stack_ptr = 0;
-    int64_t out_queue[HARD_MAX_LENGTH];
-    int out_queue_size = 0;
+    int32_t op_stack[HARD_MAX_LENGTH];
+    int32_t op_stack_ptr = 0;
+    int32_t out_queue[HARD_MAX_LENGTH];
+    int32_t out_queue_size = 0;
 
-    for (int i = 0; i < M && expressions[b][i] != NO_OP; ++i)
+    for (int32_t i = 0; i < M && expressions[b][i] != NO_OP; ++i)
     {
-        const int64_t token = expressions[b][i];
+        const int32_t token = expressions[b][i];
         if (precedence[token] == 0)
         { // Terminal
             if (out_queue_size >= HARD_MAX_LENGTH)
@@ -243,20 +243,20 @@ __global__ void parse_to_postfix_kernel(
         out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
     }
 
-    for (int i = 0; i < out_queue_size; ++i)
+    for (int32_t i = 0; i < out_queue_size; ++i)
     {
         ops[b][i] = out_queue[i];
     }
-    for (int i = out_queue_size; i < M; ++i)
+    for (int32_t i = out_queue_size; i < M; ++i)
     {
         ops[b][i] = NO_OP; // padding
     }
 
-    int64_t child_stack[HARD_MAX_LENGTH];
-    int child_stack_ptr = 0;
-    for (int i = 0; i < out_queue_size; i++)
+    int32_t child_stack[HARD_MAX_LENGTH];
+    int32_t child_stack_ptr = 0;
+    for (int32_t i = 0; i < out_queue_size; i++)
     {
-        int64_t token = out_queue[i];
+        int32_t token = out_queue[i];
         if (is_unary(token))
         {
             if (child_stack_ptr < 1)
@@ -264,7 +264,7 @@ __global__ void parse_to_postfix_kernel(
                 errors[b] = 5; // Unary operator without operand
                 return;
             }
-            int64_t child_index = child_stack[--child_stack_ptr];
+            int32_t child_index = child_stack[--child_stack_ptr];
             children[b][i][0] = child_index;
             children[b][i][1] = NULL_CHILD;
         }
@@ -275,8 +275,8 @@ __global__ void parse_to_postfix_kernel(
                 errors[b] = 6; // Binary operator without enough operands
                 return;
             }
-            int64_t right_child_index = child_stack[--child_stack_ptr];
-            int64_t left_child_index = child_stack[--child_stack_ptr];
+            int32_t right_child_index = child_stack[--child_stack_ptr];
+            int32_t left_child_index = child_stack[--child_stack_ptr];
             children[b][i][0] = left_child_index;
             children[b][i][1] = right_child_index;
         }
@@ -308,7 +308,7 @@ void parse_to_postfix_cuda_impl(
     int64_t B,
     int64_t M)
 {
-    const int threads = THREAD_COUNT; // TODO: Magic number
+    const int threads = THREAD_COUNT;
     const int blocks = (B + threads - 1) / threads;
     parse_to_postfix_kernel<<<blocks, threads>>>(
         precedence,

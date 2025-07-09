@@ -146,7 +146,7 @@ void ProbababilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(in
     this->precedence.index_put_({SQUARE}, 3); // square
     this->precedence.index_put_({SQRT}, 3);   // sqrt
 
-    this->terminal_limit = VAR_START_ID + n_variables;
+    this->terminal_limit = VAR_START_ID + n_variables + 2;
 
     // Level 4: Parentheses
     this->precedence.index_put_({VAR_START_ID + n_variables}, 4);     // (
@@ -157,6 +157,10 @@ void ProbababilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(in
 
 int64_t ProbababilisticContextFreeGrammar::get_token_id(std::string s)
 {
+    if (s.empty())
+    {
+        throw std::invalid_argument("Symbol cannot be empty.");
+    }
     auto it = symbol_to_id.find(s);
     if (it != symbol_to_id.end())
     {
@@ -166,31 +170,34 @@ int64_t ProbababilisticContextFreeGrammar::get_token_id(std::string s)
     {
         // If the symbol is not found, assign a new ID
         int64_t new_id = new_symbol_id_t++;
-        symbol_to_id[s] = new_id;
+        add_symbol(s, new_id);
         return new_id;
     }
 }
 
-std::vector<int64_t> ProbababilisticContextFreeGrammar::parse_sides(std::string s)
+std::vector<int64_t> ProbababilisticContextFreeGrammar::parse_sides(std::string s, std::string line)
 {
     std::vector<int64_t> result;
     std::istringstream ss(s);
     std::string token;
     while (ss >> token)
     {
+        if (token.empty())
+            throw std::invalid_argument("Empty token found in right hand side grammar rule: " + line);
         int64_t token_id = get_token_id(token);
         result.push_back(token_id);
     }
     return result;
 }
 
-ProbababilisticContextFreeGrammar::ProbababilisticContextFreeGrammar(std::string grammar, std::string start_symbol, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries, float tolerance)
-    : start_symbol(std::move(start_symbol)),
+ProbababilisticContextFreeGrammar::ProbababilisticContextFreeGrammar(std::string grammar, std::string start_symbol_param, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries, float tolerance, bool verbose)
+    : start_symbol(std::move(start_symbol_param)),
       padded_maximum_length(padded_maximum_length),
       device(device),
       tolerance(tolerance),
       max_tries(max_tries),
-      n_variables(n_variables)
+      n_variables(n_variables),
+      verbose(verbose)
 {
     if (padded_maximum_length > HARD_MAX_LENGTH)
     {
@@ -219,6 +226,11 @@ ProbababilisticContextFreeGrammar::ProbababilisticContextFreeGrammar(std::string
             throw std::invalid_argument("Invalid grammar rule: " + line);
 
         std::string lhs = trim(line.substr(0, arrow_pos));
+
+        if (lhs.empty())
+        {
+            throw std::invalid_argument("LHS cannot be empty in rule: " + line);
+        }
         std::string rhs_and_prob = trim(line.substr(arrow_pos + 2));
         // throw if multiple '->' in the line
         if (rhs_and_prob.find("->") != std::string::npos)
@@ -247,13 +259,13 @@ ProbababilisticContextFreeGrammar::ProbababilisticContextFreeGrammar(std::string
         float probability = std::stof(trim(prob_str));
 
         // Parse LHS and RHS
-        std::vector<int64_t> lhs_tokens = parse_sides(lhs);
+        std::vector<int64_t> lhs_tokens = parse_sides(lhs, line);
         if (lhs_tokens.size() != 1)
         {
             throw std::invalid_argument("LHS must contain exactly one non-terminal: " + lhs);
         }
         int64_t lhs_token_id = lhs_tokens[0];
-        std::vector<int64_t> rhs_tokens = parse_sides(rhs);
+        std::vector<int64_t> rhs_tokens = parse_sides(rhs, line);
 
         if (rhs_tokens.empty())
         {
@@ -372,10 +384,36 @@ ProbababilisticContextFreeGrammar::ProbababilisticContextFreeGrammar(std::string
         if (start_idx == end_idx)
         {
             // This symbol has no rules, it must be a terminal
-            if (id_to_symbol.find(i) == id_to_symbol.end())
+
+            throw std::invalid_argument("Symbol " + id_to_symbol[i] + " with ID " + std::to_string(i) + " has no rules and is not a terminal.");
+        }
+    }
+
+    if (verbose)
+    {
+        std::cout << "ProbabilisticContextFreeGrammar initialized with " << sorted_rule_lhs.size() << " rules." << std::endl;
+        std::cout << "\tStart symbol: " << this->start_symbol;
+        std::cout << ", ID: " << get_token_id(this->start_symbol) << std::endl;
+        std::cout << "\tMaximum length: " << padded_maximum_length << std::endl;
+        std::cout << "\tNumber of variables: " << n_variables << std::endl;
+        std::cout << "\tDevice: " << device << std::endl;
+        std::cout << "\tMax tries: " << max_tries << std::endl;
+        std::cout << "\tTolerance: " << tolerance << std::endl;
+        for (const auto &pair : symbol_to_id)
+        {
+            std::cout << "\tSymbol: " << pair.first << ", ID: " << pair.second << std::endl;
+        }
+
+        // Print the processed grammar rules
+        std::cout << "Processed grammar rules:" << std::endl;
+        for (size_t i = 0; i < sorted_rule_lhs.size(); ++i)
+        {
+            std::cout << "\tRule " << i + 1 << ": " << id_to_symbol[sorted_rule_lhs[i]] << " -> ";
+            for (const auto &rhs : sorted_rhsides[i])
             {
-                throw std::invalid_argument("Symbol with ID " + std::to_string(i) + " has no rules and is not a terminal.");
+                std::cout << id_to_symbol[rhs] << " ";
             }
+            std::cout << "[" << sorted_probabilities[i] << "]" << std::endl;
         }
     }
 }
@@ -386,7 +424,7 @@ torch::Tensor ProbababilisticContextFreeGrammar::sample_string_expression(int64_
 {
     auto output = torch::empty({B, padded_maximum_length}, torch::TensorOptions().dtype(torch::kInt64).device(device));
     auto errors = torch::empty({B}, torch::TensorOptions().dtype(torch::kInt64).device(device));
-    int64_t start_symbol_id = get_token_id(start_symbol);
+    int64_t start_symbol_id = get_token_id(this->start_symbol);
 
     // Init seeds for random number generation
     auto seeds = torch::randint(0, INT64_MAX, {B}, torch::TensorOptions().dtype(torch::kInt64).device(device));
@@ -469,7 +507,7 @@ std::tuple<torch::Tensor, torch::Tensor> ProbababilisticContextFreeGrammar::pars
     // Check that only terminal symbols are used
     TORCH_CHECK((0 <= expressions).all().item<bool>(),
                 "All symbols in the expressions must be non-negative integers.");
-    TORCH_CHECK((expressions < this->terminal_limit).item<bool>(),
+    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
                 "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
 
     int64_t B = expressions.size(0);
@@ -617,17 +655,18 @@ std::vector<std::string> ProbababilisticContextFreeGrammar::to_string(torch::Ten
 void init_pcfg(pybind11::module &m)
 {
     pybind11::class_<ProbababilisticContextFreeGrammar>(m, "ProbababilisticContextFreeGrammar")
-        .def(pybind11::init<std::string, std::string, int64_t, int64_t, torch::Device, int64_t, float>(),
+        .def(pybind11::init<std::string, std::string, int64_t, int64_t, torch::Device, int64_t, float, bool>(),
              pybind11::arg("grammar"),
              pybind11::arg("start_symbol"),
              pybind11::arg("padded_maximum_length"),
              pybind11::arg("n_variables"),
              pybind11::arg("device"),
-             pybind11::arg("max_tries") = 100,
-             pybind11::arg("tolerance") = DEFAULT_tolerence)
-        .def("sample_string_expression", &ProbababilisticContextFreeGrammar::sample_string_expression, "Sample string expressions from the grammar")
-        .def("sample", &ProbababilisticContextFreeGrammar::sample)
-        .def("to_string", &ProbababilisticContextFreeGrammar::to_string)
-        .def("parse_to_postfix", &ProbababilisticContextFreeGrammar::parse_to_postfix)
-        .def("sample_string_expression", &ProbababilisticContextFreeGrammar::sample_string_expression);
+             pybind11::arg("max_tries") = 64,
+             pybind11::arg("tolerance") = DEFAULT_tolerence,
+             pybind11::arg("verbose") = false)
+        .def("sample", &ProbababilisticContextFreeGrammar::sample, "Sample from the PCFG")
+        .def("sample_string_expression", &ProbababilisticContextFreeGrammar::sample_string_expression, "Sample a string expression from the PCFG")
+        .def("to_string", &ProbababilisticContextFreeGrammar::to_string, "Convert a tensor of expressions to a list of strings")
+        .def("parse_to_postfix", &ProbababilisticContextFreeGrammar::parse_to_postfix, "Parse a string expression to a postfix representation")
+        .def_readonly("device", &ProbababilisticContextFreeGrammar::device);
 }

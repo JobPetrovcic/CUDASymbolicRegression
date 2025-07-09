@@ -1,6 +1,8 @@
 import torch
 import pytest
 import time
+import random
+from collections import defaultdict
 from symbolic_torch import ProbababilisticContextFreeGrammar
 from typing import Literal
 
@@ -122,7 +124,7 @@ def test_binary_operator_grammar(device: Literal["cpu", "cuda"], op: str, op_id:
 def test_test_grammar(device: Literal["cpu", "cuda"]):
     if not torch.cuda.is_available() and device == "cuda":
         pytest.skip("CUDA not available")
-    pcfg = ProbababilisticContextFreeGrammar(test_grammar, "E", 128, 1, torch.device(device))
+    pcfg = ProbababilisticContextFreeGrammar(test_grammar, "E", 128, 1, torch.device(device), verbose=True)
     samples = pcfg.sample_string_expression(100)
     assert samples.shape == (100, 128)
     strings = pcfg.to_string(samples)
@@ -156,7 +158,102 @@ def test_test_grammar(device: Literal["cpu", "cuda"]):
 
 def test_undefined_symbol_grammar():
     grammar = "S -> A [1.0]"
-    with pytest.raises(ValueError, match="Symbol with ID .* has no rules and is not a terminal."):
+    with pytest.raises(ValueError, match="Symbol A with ID 20 has no rules and is not a terminal."):
         ProbababilisticContextFreeGrammar(grammar, "S", 10, 1, torch.device("cpu"))
-    with pytest.raises(ValueError, match="Symbol with ID .* has no rules and is not a terminal."):
+    with pytest.raises(ValueError, match="Symbol A with ID 20 has no rules and is not a terminal."):
         ProbababilisticContextFreeGrammar(grammar, "S", 10, 1, torch.device("cuda"))
+
+# --- Simple inefficient Python generator for the test_grammar ---
+def parse_grammar(grammar_str : str) -> dict[str, list[tuple[list[str], float]]]:
+    rules : dict[str, list[tuple[list[str], float]]] = defaultdict(list)
+    for line in grammar_str.strip().split("\n"):
+        if not line.strip():
+            continue
+        lhs, rhs_prob = line.split("->")
+        rhs, prob = rhs_prob.rsplit("[", 1)
+        rhs = rhs.strip()
+        prob = float(prob.strip().rstrip("]"))
+        rules[lhs.strip()].append((rhs.split(), prob))
+    return rules
+
+def sample_from_grammar(rules : dict[str, list[tuple[list[str], float]]], start_symbol: str, length_limit : int) -> list[str]:
+    def expand(symbol : str, current_length: int) -> list[str] | None:
+        if current_length > length_limit:
+            return None
+        if symbol not in rules:
+            return [symbol]
+        
+        productions, probs = zip(*rules[symbol])
+        chosen = random.choices(productions, weights=probs)[0]
+        
+        result : list[str] = []
+        for sym in chosen:
+            expansion = expand(sym, current_length + len(result))
+            if expansion is None:
+                return None
+            result.extend(expansion)
+        
+        if current_length + len(result) > length_limit:
+            return None
+            
+        return result
+
+    while True:
+        generated = expand(start_symbol, 0)
+        if generated is not None:
+            return generated
+
+# --- Test comparing probabilities ---
+def test_python_vs_cpp_cuda_probabilities():
+    limit = 128
+    grammar = test_grammar
+    rules = parse_grammar(grammar)
+    n_samples = 100000
+    target_exprs = [
+        "X_0",
+        "X_0 * X_0",
+        "sin ( X_0 )",
+        "cos ( X_0 )",
+        "exp ( X_0 )",
+        "( X_0 ) ^2",
+        "X_0 + X_0",
+        "X_0 - X_0",
+        "X_0 / X_0",
+    ]
+    # Python generator sampling
+    py_counts : dict[str, int] = defaultdict(int)
+    for _ in range(n_samples):
+        expr = sample_from_grammar(rules, "E", limit)
+        expr_str = " ".join(expr).strip()
+        if expr_str in target_exprs:
+            py_counts[expr_str] += 1
+
+    # C++/CUDA implementation sampling
+    pcfg_cpu = ProbababilisticContextFreeGrammar(test_grammar, "E", limit, 1, torch.device("cpu"))
+    samples_cpu = pcfg_cpu.sample_string_expression(n_samples)
+    strings_cpu = pcfg_cpu.to_string(samples_cpu)
+    cpp_counts : dict[str, int] = defaultdict(int)
+    for s in strings_cpu:
+        if s in target_exprs:
+            cpp_counts[s] += 1
+    
+    pcfg_cuda = ProbababilisticContextFreeGrammar(test_grammar, "E", limit, 1, torch.device("cuda"))
+    samples_cuda = pcfg_cuda.sample_string_expression(n_samples)
+    strings_cuda = pcfg_cuda.to_string(samples_cuda)
+    cpp_counts_cuda : dict[str, int] = defaultdict(int)
+    for s in strings_cuda:
+        if s in target_exprs:
+            cpp_counts_cuda[s] += 1
+
+    # assert that the probabilities are similar with relative error < 0.1
+    for expr in target_exprs:
+        py_prob = py_counts[expr] / n_samples
+        cpp_prob = cpp_counts[expr] / n_samples
+        cuda_prob = cpp_counts_cuda[expr] / n_samples
+        # Check CPU vs Python
+        assert abs(py_prob - cpp_prob) / max(py_prob, cpp_prob) < 0.2, f"Probability mismatch for {expr}: {py_prob:.5f} vs {cpp_prob:.5f}"
+        # Check CUDA vs Python
+        assert abs(py_prob - cuda_prob) / max(py_prob, cuda_prob) < 0.2, f"Probability mismatch for {expr}: {py_prob:.5f} vs {cuda_prob:.5f}"
+
+        # print
+        print(f"Expression: {expr}, Python: {py_prob:.5f}, C++: {cpp_prob:.5f}, CUDA: {cuda_prob:.5f}")

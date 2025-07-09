@@ -41,6 +41,8 @@ def evaluate(
     ...
 
 class ProbababilisticContextFreeGrammar:
+    device: torch.device
+
     def __init__(
         self,
         grammar: str,
@@ -49,7 +51,8 @@ class ProbababilisticContextFreeGrammar:
         n_variables: int,
         device: torch.device,
         max_tries: int = 64,
-        tolerance: float = 1e-8,
+        tolerance: float = 1e-6,
+        verbose: bool = False
     ) -> None:
         ...
     def sample(self, B: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -57,4 +60,6 @@ class ProbababilisticContextFreeGrammar:
     def sample_string_expression(self, B: int) -> torch.Tensor:
         ...
     def to_string(self, expressions: torch.Tensor) -> list[str]:
+        ...
+    def parse_to_postfix(self, expressions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         ...

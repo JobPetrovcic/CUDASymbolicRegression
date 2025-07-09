@@ -67,7 +67,29 @@ C10_HOST_DEVICE inline bool is_binary(int op)
 
 C10_HOST_DEVICE inline bool is_right_associative(int op)
 {
-    return is_unary(op);
+    // Returns true if the operator is right-associative, false if left-associative
+    switch (op)
+    {
+    case ADD:
+    case SUB:
+    case MUL:
+    case DIV:
+        return false; // Left associative
+    case SIN:
+    case COS:
+    case EXP:
+    case LOG:
+    case SQUARE:
+    case SQRT:
+        return true; // Right associative
+    default:
+        return false; // Default to left associative for unknown ops
+    }
+}
+
+C10_HOST_DEVICE inline bool is_left_associative(int op)
+{
+    return !is_right_associative(op);
 }
 
 // --- Wrappers with Strict Domain Checking ---
