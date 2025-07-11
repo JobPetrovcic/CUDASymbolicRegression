@@ -25,7 +25,7 @@ public:
 };
 
 // Python-facing wrapper function
-std::tuple<torch::Tensor, torch::Tensor> evaluate(
+std::tuple<torch::Tensor, torch::Tensor> evaluate_backend(
     torch::Tensor X,
     torch::Tensor Ops,
     torch::Tensor Ch,

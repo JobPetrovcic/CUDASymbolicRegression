@@ -98,13 +98,30 @@ void evaluation_forward_step_k_cpu_impl(
             {
             case LEARNABLE_CONSTANT:
             {
-                int64_t c_idx = posC_acc[k][b];
-                if (c_idx != NULL_CHILD)
-                    result = c_acc[c_idx];
+                const int64_t c_idx = posC_acc[k][b]; // Maybe TODO: add a check
+                result = c_acc[c_idx];
                 break;
             }
             case CONST_1:
                 result = static_cast<scalar_t>(1.0);
+                break;
+            case CONST_2:
+                result = static_cast<scalar_t>(2.0);
+                break;
+            case CONST_3:
+                result = static_cast<scalar_t>(3.0);
+                break;
+            case CONST_4:
+                result = static_cast<scalar_t>(4.0);
+                break;
+            case CONST_5:
+                result = static_cast<scalar_t>(5.0);
+                break;
+            case PI:
+                result = static_cast<scalar_t>(M_PI);
+                break;
+            case E:
+                result = static_cast<scalar_t>(M_E);
                 break;
             case SIN:
                 result = sin_wrapper(arg0);
@@ -136,8 +153,12 @@ void evaluation_forward_step_k_cpu_impl(
             case DIV:
                 result = div_wrapper(arg0, arg1);
                 break;
+            case POW:
+                result = pow_wrapper(arg0, arg1);
+                break;
             default:
             {
+                // This should be unreachable if validation is correct
                 if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
                 {
                     result = x_acc[n][op - VAR_START_ID];
@@ -283,21 +304,14 @@ void evaluation_backward_step_k_cpu_impl(
                 //                {
                 //                    g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
                 //                }
-                if (g_in == static_cast<scalar_t>(0.0))
-                {
+                if (arg0 < static_cast<scalar_t>(0.0))
                     g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
-                }
                 else
                 {
-                    if (arg0 <= static_cast<scalar_t>(0.0))
-                    {
-                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 4); // Error code 4 for gradient on invalid sqrt
-                        g_out0 = static_cast<scalar_t>(0.0);
-                    }
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        g_out0 = static_cast<scalar_t>(0.0); // Return zero gradient if incoming gradient is zero
                     else
-                    {
                         g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
-                    }
                 }
 #pragma omp atomic
                 grad_cache_acc[ch0_idx][n][b] += g_out0;
@@ -362,6 +376,29 @@ void evaluation_backward_step_k_cpu_impl(
                 {
                     g_out0 = div_wrapper(g_in, arg1);
                     g_out1 = div_wrapper(-g_in * arg0, (arg1 * arg1));
+                }
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+#pragma omp atomic
+                grad_cache_acc[ch1_idx][n][b] += g_out1;
+                break;
+            }
+            case POW:
+            {
+                int64_t ch0_idx = ch_acc[k][b][0];
+                int64_t ch1_idx = ch_acc[k][b][1];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t arg1 = cache_acc[ch1_idx][n][b];
+                scalar_t g_out0, g_out1;
+                if (arg0 < static_cast<scalar_t>(0.0))
+                {
+                    g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                    g_out1 = std::numeric_limits<scalar_t>::quiet_NaN();
+                }
+                else
+                {
+                    g_out0 = mul_wrapper(g_in, mul_wrapper(pow_wrapper(arg0, sub_wrapper(arg1, static_cast<scalar_t>(1.0))), arg1));
+                    g_out1 = mul_wrapper(g_in, mul_wrapper(log_wrapper(arg0), pow_wrapper(arg0, arg1)));
                 }
 #pragma omp atomic
                 grad_cache_acc[ch0_idx][n][b] += g_out0;

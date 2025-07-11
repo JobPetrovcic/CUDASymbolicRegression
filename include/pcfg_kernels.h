@@ -33,6 +33,28 @@ void pcfg_sample_string_expression_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 1> seeds,
     int64_t B);
 
+void parse_to_prefix_cpu_impl(
+    const torch::TensorAccessor<int64_t, 1> precedence,
+    const torch::TensorAccessor<int64_t, 2> expressions,
+    torch::TensorAccessor<int64_t, 2> ops,
+    torch::TensorAccessor<int64_t, 3> children,
+    torch::TensorAccessor<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B,
+    int64_t M);
+
+void parse_to_prefix_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 1> precedence,
+    const torch::PackedTensorAccessor32<int64_t, 2> expressions,
+    torch::PackedTensorAccessor32<int64_t, 2> ops,
+    torch::PackedTensorAccessor32<int64_t, 3> children,
+    torch::PackedTensorAccessor32<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B,
+    int64_t M);
+
 void parse_to_postfix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> precedence,
     const torch::TensorAccessor<int64_t, 2> expressions,

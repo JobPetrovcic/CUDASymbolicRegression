@@ -7,6 +7,12 @@ class Operator(Enum):
     NO_OP: int
     LEARNABLE_CONSTANT: int
     CONST_1: int
+    CONST_2: int
+    CONST_3: int
+    CONST_4: int
+    CONST_5: int
+    PI: int
+    E: int
     SIN: int
     COS: int
     EXP: int
@@ -17,30 +23,30 @@ class Operator(Enum):
     SUB: int
     MUL: int
     DIV: int
+    POW: int
     VAR_START_ID: int
 
 # 2. Define the signature of the 'evaluate' function
-def evaluate(
-    X: torch.Tensor,
-    Ops: torch.Tensor,
-    Ch: torch.Tensor,
-    C: Optional[torch.Tensor] = None
+def evaluate_backend(
+    X: torch.Tensor, # (N, n_x)
+    Ops: torch.Tensor, # (B, M)
+    Ch: torch.Tensor, # (B, M, MAX_ARITY)
+    C: Optional[torch.Tensor] = None # (SC, ) where SC is the number of learnable constants used in Ops
 ) -> torch.Tensor:
     """
     Let M be the maximum number of operations in an expression, B the batch size of the expressions, N the number of datapoints, and n_x the number of variables in the expressions. 
 
     For an expression we unroll it using the postfix order into separate tensors Ops and Ch.
 
-    X: Input tensor for the variables of shape (
+    X: Input tensor for the variables of shape (M, N, B).
     Ops: Tensor of operations specified by integers (see Operator Enum) of shape (M, B) for the expressions in postfix order. If some operations are not used, they can be set to NO_OP.
     Ch: Tensor of postfix order indices for the children of nodes in th expressions of shape (M, B). If the operation has less than MAX_ARITY = 2 children, the unused children must be set to -1.
     C: tensor of learnable constants of shape (SC) where SC is the number of learnable constants used in Ops. 
     
-    TODO
     """
     ...
 
-class ProbababilisticContextFreeGrammar:
+class ProbabilisticContextFreeGrammar:
     device: torch.device
 
     def __init__(
@@ -61,5 +67,11 @@ class ProbababilisticContextFreeGrammar:
         ...
     def to_string(self, expressions: torch.Tensor) -> list[str]:
         ...
+    def parse_to_prefix(self, expressions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        ...
     def parse_to_postfix(self, expressions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         ...
+
+    def get_symbol_id(self, symbol: str) -> int:
+        ...
+        

@@ -30,35 +30,7 @@ std::string trim(const std::string &s)
     return std::string(start, end + 1);
 }
 
-/*
-
-NO_OP = 0,
-LEARNABLE_CONSTANT = 1,
-
-// Hard Constants
-CONST_1 = 2,
-// Add more if needed, e.g., PI, E
-
-// Unary Functions
-SIN = 6,
-COS = 7,
-EXP = 8,
-LOG = 9,
-SQUARE = 10,
-SQRT = 11,
-
-// Binary Functions
-ADD = 12,
-SUB = 13,
-MUL = 14,
-DIV = 15,
-
-// Variable Start ID
-// An op_code >= VAR_START_ID represents variable X_{op_code - VAR_START_ID}
-VAR_START_ID = 16
-*/
-
-void ProbababilisticContextFreeGrammar::add_symbol(const std::string &s, int64_t id)
+void ProbabilisticContextFreeGrammar::add_symbol(const std::string &s, int64_t id)
 {
     symbol_to_id[s] = id;
     if (id_to_symbol.find(id) == id_to_symbol.end())
@@ -68,13 +40,21 @@ void ProbababilisticContextFreeGrammar::add_symbol(const std::string &s, int64_t
 }
 
 // TODO: check terminal bounds
-void ProbababilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int64_t n_variables)
+void ProbabilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int64_t n_variables)
 {
     symbol_to_id = std::unordered_map<std::string, int64_t>();
     id_to_symbol = std::unordered_map<int64_t, std::string>();
     add_symbol("C", LEARNABLE_CONSTANT);
 
     add_symbol("1", CONST_1);
+    add_symbol("2", CONST_2);
+    add_symbol("3", CONST_3);
+    add_symbol("4", CONST_4);
+    add_symbol("5", CONST_5);
+    add_symbol("pi", PI);
+    add_symbol("PI", PI);
+    add_symbol("e", E);
+    add_symbol("E", E);
 
     add_symbol("sin", SIN);
     add_symbol("SIN", SIN);
@@ -112,6 +92,8 @@ void ProbababilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(in
 
     add_symbol("/", DIV);
 
+    add_symbol("^", POW);
+
     for (int64_t i = 0; i < n_variables; ++i)
     {
         std::string var_name = "X_" + std::to_string(i);
@@ -129,22 +111,31 @@ void ProbababilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(in
     // Constants and Variables have lowest precedence
     this->precedence.index_put_({LEARNABLE_CONSTANT}, 0); // C
     this->precedence.index_put_({CONST_1}, 0);            // 1
+    this->precedence.index_put_({CONST_2}, 0);
+    this->precedence.index_put_({CONST_3}, 0);
+    this->precedence.index_put_({CONST_4}, 0);
+    this->precedence.index_put_({CONST_5}, 0);
+    this->precedence.index_put_({PI}, 0);
+    this->precedence.index_put_({E}, 0);
     for (int64_t i = 0; i < n_variables; ++i)
     {
         this->precedence.index_put_({VAR_START_ID + i}, 0); // X_i
     }
-    // Level 2: Binary function +, -, *, /
+    // Level 1: ADD, SUB
     this->precedence.index_put_({ADD}, 1); // +
     this->precedence.index_put_({SUB}, 1); // -
+    // Level 2: MUL, DIV
     this->precedence.index_put_({MUL}, 2); // *
     this->precedence.index_put_({DIV}, 2); // /
-    // Level 3: Unary functions
-    this->precedence.index_put_({SIN}, 3);    // sin
-    this->precedence.index_put_({COS}, 3);    // cos
-    this->precedence.index_put_({EXP}, 3);    // exp
-    this->precedence.index_put_({LOG}, 3);    // log
-    this->precedence.index_put_({SQUARE}, 3); // square
-    this->precedence.index_put_({SQRT}, 3);   // sqrt
+    // Level 3: POW
+    this->precedence.index_put_({POW}, 3); // ^
+    // Level 4: Unary functions
+    this->precedence.index_put_({SIN}, 4);
+    this->precedence.index_put_({COS}, 4);
+    this->precedence.index_put_({EXP}, 4);
+    this->precedence.index_put_({LOG}, 4);
+    this->precedence.index_put_({SQUARE}, 4);
+    this->precedence.index_put_({SQRT}, 4);
 
     this->terminal_limit = VAR_START_ID + n_variables + 2;
 
@@ -155,7 +146,7 @@ void ProbababilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(in
     // START OF NON-TERMINALS
 }
 
-int64_t ProbababilisticContextFreeGrammar::get_token_id(std::string s)
+int64_t ProbabilisticContextFreeGrammar::get_token_id(std::string s)
 {
     if (s.empty())
     {
@@ -175,7 +166,7 @@ int64_t ProbababilisticContextFreeGrammar::get_token_id(std::string s)
     }
 }
 
-std::vector<int64_t> ProbababilisticContextFreeGrammar::parse_sides(std::string s, std::string line)
+std::vector<int64_t> ProbabilisticContextFreeGrammar::parse_sides(std::string s, std::string line)
 {
     std::vector<int64_t> result;
     std::istringstream ss(s);
@@ -190,7 +181,7 @@ std::vector<int64_t> ProbababilisticContextFreeGrammar::parse_sides(std::string 
     return result;
 }
 
-ProbababilisticContextFreeGrammar::ProbababilisticContextFreeGrammar(std::string grammar, std::string start_symbol_param, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries, float tolerance, bool verbose)
+ProbabilisticContextFreeGrammar::ProbabilisticContextFreeGrammar(std::string grammar, std::string start_symbol_param, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries, float tolerance, bool verbose)
     : start_symbol(std::move(start_symbol_param)),
       padded_maximum_length(padded_maximum_length),
       device(device),
@@ -418,9 +409,63 @@ ProbababilisticContextFreeGrammar::ProbababilisticContextFreeGrammar(std::string
     }
 }
 
-ProbababilisticContextFreeGrammar::~ProbababilisticContextFreeGrammar() {}
+ProbabilisticContextFreeGrammar::~ProbabilisticContextFreeGrammar() {}
 
-torch::Tensor ProbababilisticContextFreeGrammar::sample_string_expression(int64_t B)
+void ProbabilisticContextFreeGrammar::process_parsing_errors(const torch::Tensor &errors, const std::string &expression_type)
+{
+    if (errors.any().item<bool>())
+    {
+        std::stringstream ss;
+        ss << "Failed to parse expressions to " << expression_type << " for some batch items. Error counts:\n";
+        auto errors_cpu = errors.to(torch::kCPU);
+        auto errors_acc = errors_cpu.accessor<int64_t, 1>();
+        std::map<int64_t, int64_t> error_counts;
+        for (int64_t i = 0; i < errors_acc.size(0); ++i)
+        {
+            if (errors_acc[i] != 0)
+                error_counts[errors_acc[i]]++;
+        }
+
+        for (const auto &pair : error_counts)
+        {
+            ss << "  Error " << pair.first << ": " << pair.second << " times. ";
+            switch (pair.first)
+            {
+            case 1:
+                ss << "(" << expression_type << " expression too long)";
+                break;
+            case 2:
+                ss << "(Operator stack overflow)";
+                break;
+            case 3:
+                ss << "(Mismatched parenthesis)";
+                break;
+            case 5:
+                ss << "(Unary operator without operand)";
+                break;
+            case 6:
+                ss << "(Binary operator without enough operands)";
+                break;
+            case 7:
+                ss << "(Child stack overflow)";
+                break;
+            case 8:
+                ss << "(Malformed expression)";
+                break;
+            case 9:
+                ss << "(Failed to generate expression after max_tries)";
+                break;
+            default:
+                ss << "(Unknown error code)";
+                break;
+            }
+            ss << "\n";
+        }
+        throw std::runtime_error(ss.str());
+    }
+}
+
+torch::Tensor ProbabilisticContextFreeGrammar::sample_string_expression(int64_t B)
 {
     auto output = torch::empty({B, padded_maximum_length}, torch::TensorOptions().dtype(torch::kInt64).device(device));
     auto errors = torch::empty({B}, torch::TensorOptions().dtype(torch::kInt64).device(device));
@@ -502,7 +547,62 @@ torch::Tensor ProbababilisticContextFreeGrammar::sample_string_expression(int64_
     return output;
 }
 
-std::tuple<torch::Tensor, torch::Tensor> ProbababilisticContextFreeGrammar::parse_to_postfix(torch::Tensor expressions)
+std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_prefix(torch::Tensor expressions)
+{
+    // Check that only terminal symbols are used
+    TORCH_CHECK((0 <= expressions).all().item<bool>(),
+                "All symbols in the expressions must be non-negative integers.");
+    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
+                "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
+
+    int64_t B = expressions.size(0);
+    int64_t M = expressions.size(1);
+
+    if (M > HARD_MAX_LENGTH)
+    {
+        throw std::invalid_argument("M must be less than or equal to HARD_MAX_LENGTH, but got " + std::to_string(M) + " > " + std::to_string(HARD_MAX_LENGTH) + ".");
+    }
+
+    auto ops = torch::full({B, M}, NO_OP, expressions.options());
+    auto children = torch::full({B, M, 2}, NULL_CHILD, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    int64_t lparenthesis_id = get_token_id("(");
+    int64_t rparenthesis_id = get_token_id(")");
+
+    if (device.is_cuda())
+    {
+        parse_to_prefix_cuda_impl(
+            this->precedence.packed_accessor32<int64_t, 1>(),
+            expressions.packed_accessor32<int64_t, 2>(),
+            ops.packed_accessor32<int64_t, 2>(),
+            children.packed_accessor32<int64_t, 3>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            lparenthesis_id,
+            rparenthesis_id,
+            B,
+            M);
+    }
+    else
+    {
+        parse_to_prefix_cpu_impl(
+            this->precedence.accessor<int64_t, 1>(),
+            expressions.accessor<int64_t, 2>(),
+            ops.accessor<int64_t, 2>(),
+            children.accessor<int64_t, 3>(),
+            errors.accessor<int64_t, 1>(),
+            lparenthesis_id,
+            rparenthesis_id,
+            B,
+            M);
+    }
+
+    process_parsing_errors(errors, "prefix");
+
+    return std::make_tuple(ops, children);
+}
+
+std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_postfix(torch::Tensor expressions)
 {
     // Check that only terminal symbols are used
     TORCH_CHECK((0 <= expressions).all().item<bool>(),
@@ -552,61 +652,12 @@ std::tuple<torch::Tensor, torch::Tensor> ProbababilisticContextFreeGrammar::pars
             M);
     }
 
-    if (errors.any().item<bool>())
-    {
-        std::stringstream ss;
-        ss << "Failed to parse expressions for some batch items. Error counts:\n";
-        auto errors_cpu = errors.to(torch::kCPU);
-        auto errors_acc = errors_cpu.accessor<int64_t, 1>();
-        std::map<int64_t, int64_t> error_counts;
-        for (int64_t i = 0; i < errors_acc.size(0); ++i)
-        {
-            if (errors_acc[i] != 0)
-                error_counts[errors_acc[i]]++;
-        }
-
-        for (const auto &pair : error_counts)
-        {
-            ss << "  Error " << pair.first << ": " << pair.second << " times. ";
-            switch (pair.first)
-            {
-            case 1:
-                ss << "(Postfix expression too long)";
-                break;
-            case 2:
-                ss << "(Operator stack overflow)";
-                break;
-            case 3:
-                ss << "(Mismatched parenthesis)";
-                break;
-            case 5:
-                ss << "(Unary operator without operand)";
-                break;
-            case 6:
-                ss << "(Binary operator without enough operands)";
-                break;
-            case 7:
-                ss << "(Child stack overflow)";
-                break;
-            case 8:
-                ss << "(Malformed expression)";
-                break;
-            case 9:
-                ss << "(Failed to generate expression after max_tries)";
-                break;
-            default:
-                ss << "(Unknown error code)";
-                break;
-            }
-            ss << "\n";
-        }
-        throw std::runtime_error(ss.str());
-    }
+    process_parsing_errors(errors, "postfix");
 
     return std::make_tuple(ops, children);
 }
 
-std::tuple<torch::Tensor, torch::Tensor> ProbababilisticContextFreeGrammar::sample(int64_t B)
+std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::sample(int64_t B)
 {
     if (B <= 0)
         throw std::invalid_argument("Batch size B must be greater than 0, but got " + std::to_string(B) + ".");
@@ -615,7 +666,7 @@ std::tuple<torch::Tensor, torch::Tensor> ProbababilisticContextFreeGrammar::samp
     return parse_to_postfix(string_samples);
 }
 
-std::vector<std::string> ProbababilisticContextFreeGrammar::to_string(torch::Tensor expressions)
+std::vector<std::string> ProbabilisticContextFreeGrammar::to_string(torch::Tensor expressions)
 {
     expressions = expressions.to(torch::kCPU);
     auto accessor = expressions.accessor<int64_t, 2>();
@@ -654,7 +705,7 @@ std::vector<std::string> ProbababilisticContextFreeGrammar::to_string(torch::Ten
 
 void init_pcfg(pybind11::module &m)
 {
-    pybind11::class_<ProbababilisticContextFreeGrammar>(m, "ProbababilisticContextFreeGrammar")
+    pybind11::class_<ProbabilisticContextFreeGrammar>(m, "ProbabilisticContextFreeGrammar")
         .def(pybind11::init<std::string, std::string, int64_t, int64_t, torch::Device, int64_t, float, bool>(),
              pybind11::arg("grammar"),
              pybind11::arg("start_symbol"),
@@ -664,9 +715,12 @@ void init_pcfg(pybind11::module &m)
              pybind11::arg("max_tries") = 64,
              pybind11::arg("tolerance") = DEFAULT_tolerence,
              pybind11::arg("verbose") = false)
-        .def("sample", &ProbababilisticContextFreeGrammar::sample, "Sample from the PCFG")
-        .def("sample_string_expression", &ProbababilisticContextFreeGrammar::sample_string_expression, "Sample a string expression from the PCFG")
-        .def("to_string", &ProbababilisticContextFreeGrammar::to_string, "Convert a tensor of expressions to a list of strings")
-        .def("parse_to_postfix", &ProbababilisticContextFreeGrammar::parse_to_postfix, "Parse a string expression to a postfix representation")
-        .def_readonly("device", &ProbababilisticContextFreeGrammar::device);
+        .def("sample", &ProbabilisticContextFreeGrammar::sample, "Sample from the PCFG")
+        .def("sample_string_expression", &ProbabilisticContextFreeGrammar::sample_string_expression, "Sample a string expression from the PCFG")
+        .def("to_string", &ProbabilisticContextFreeGrammar::to_string, "Convert a tensor of expressions to a list of strings")
+        .def("parse_to_postfix", &ProbabilisticContextFreeGrammar::parse_to_postfix, "Parse a string expression to a postfix representation")
+        .def("parse_to_prefix", &ProbabilisticContextFreeGrammar::parse_to_prefix, "Parse a string expression to a prefix representation")
+        .def_readonly("device", &ProbabilisticContextFreeGrammar::device)
+        .def("get_symbol_id", &ProbabilisticContextFreeGrammar::get_symbol_id, "Get the ID of a symbol",
+             pybind11::arg("symbol"));
 }

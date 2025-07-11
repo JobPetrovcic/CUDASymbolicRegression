@@ -11,9 +11,6 @@ void validate_inputs(const torch::Tensor &Ops, const torch::Tensor &Ch, int n_x)
     TORCH_CHECK(Ops.is_contiguous(), "Ops tensor must be contiguous");
     TORCH_CHECK(Ch.is_contiguous(), "Ch tensor must be contiguous");
 
-    size_t M = Ops.size(0);
-    size_t B = Ops.size(1);
-
     // --- Allocate error flag on the same device ---
     auto options = torch::TensorOptions().dtype(torch::kInt32).device(device);
     auto error_flag_tensor = torch::zeros({1}, options);
@@ -105,8 +102,6 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
 
     const auto device = X.device();
     const int64_t M = Ops.size(0);
-    const int64_t B = Ops.size(1);
-    const int64_t N = X.size(0);
     const int64_t n_x = X.size(1);
     const int64_t SC = C.size(0);
 
@@ -193,11 +188,12 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
 }
 
 // Python-facing wrapper function
-torch::Tensor evaluate(
-    torch::Tensor X,
-    torch::Tensor Ops,
-    torch::Tensor Ch,
-    torch::Tensor C)
+torch::Tensor evaluate_backend(
+    torch::Tensor X,   // (N, n_x)
+    torch::Tensor Ops, // (M, B)
+    torch::Tensor Ch,  // (M, B, MAX_ARITY)
+    torch::Tensor C    // (SC)
+)
 {
     const auto device = X.device();
     TORCH_CHECK(Ops.device() == device && Ch.device() == device && C.device() == device,
@@ -259,10 +255,16 @@ torch::Tensor evaluate(
 
 void init_symbolic_evaluation(pybind11::module &m)
 {
-    pybind11::enum_<Operator>(m, "Operator", "Enum for symbolic operations")
+    pybind11::enum_<Operator>(m, "Operator", "Enum for symbolic operations", py::arithmetic())
         .value("NO_OP", Operator::NO_OP)
         .value("LEARNABLE_CONSTANT", Operator::LEARNABLE_CONSTANT)
         .value("CONST_1", Operator::CONST_1)
+        .value("CONST_2", Operator::CONST_2)
+        .value("CONST_3", Operator::CONST_3)
+        .value("CONST_4", Operator::CONST_4)
+        .value("CONST_5", Operator::CONST_5)
+        .value("PI", Operator::PI)
+        .value("E", Operator::E)
         .value("SIN", Operator::SIN)
         .value("COS", Operator::COS)
         .value("EXP", Operator::EXP)
@@ -273,8 +275,9 @@ void init_symbolic_evaluation(pybind11::module &m)
         .value("SUB", Operator::SUB)
         .value("MUL", Operator::MUL)
         .value("DIV", Operator::DIV)
+        .value("POW", Operator::POW)
         .value("VAR_START_ID", Operator::VAR_START_ID)
         .export_values();
 
-    m.def("evaluate", static_cast<torch::Tensor (*)(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor)>(&evaluate), "Evaluate a batch of symbolic expressions.");
+    m.def("evaluate_backend", static_cast<torch::Tensor (*)(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor)>(&evaluate_backend), "Evaluate a batch of symbolic expressions.");
 }

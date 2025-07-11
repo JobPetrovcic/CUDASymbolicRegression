@@ -14,25 +14,31 @@ enum Operator : int
 
     // Hard Constants
     CONST_1 = 2,
-    // Add more if needed, e.g., PI, E
+    CONST_2 = 3,
+    CONST_3 = 4,
+    CONST_4 = 5,
+    CONST_5 = 6,
+    PI = 7,
+    E = 8,
 
     // Unary Functions
-    SIN = 6,
-    COS = 7,
-    EXP = 8,
-    LOG = 9,
-    SQUARE = 10,
-    SQRT = 11,
+    SIN = 10,
+    COS = 11,
+    EXP = 12,
+    LOG = 13,
+    SQUARE = 14,
+    SQRT = 15,
 
     // Binary Functions
-    ADD = 12,
-    SUB = 13,
-    MUL = 14,
-    DIV = 15,
+    ADD = 20,
+    SUB = 21,
+    MUL = 22,
+    DIV = 23,
+    POW = 24,
 
     // Variable Start ID
     // An op_code >= VAR_START_ID represents variable X_{op_code - VAR_START_ID}
-    VAR_START_ID = 16
+    VAR_START_ID = 30
 };
 
 // Compile-time constants
@@ -45,7 +51,7 @@ C10_HOST_DEVICE inline int get_arity(int op)
 {
     if (op >= SIN && op <= SQRT)
         return 1;
-    if (op >= ADD && op <= DIV)
+    if (op >= ADD && op <= POW)
         return 2;
     return 0;
 }
@@ -75,6 +81,7 @@ C10_HOST_DEVICE inline bool is_right_associative(int op)
     case MUL:
     case DIV:
         return false; // Left associative
+    case POW:
     case SIN:
     case COS:
     case EXP:
@@ -168,4 +175,14 @@ C10_HOST_DEVICE inline scalar_t div_wrapper(scalar_t a, scalar_t b)
         return std::numeric_limits<scalar_t>::quiet_NaN();
     }
     return a / b;
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t pow_wrapper(scalar_t a, scalar_t b)
+{
+    if (a < static_cast<scalar_t>(0.0))
+    {
+        return std::numeric_limits<scalar_t>::quiet_NaN(); // POLICY: Return NaN for negative base
+    }
+    return pow(a, b);
 }

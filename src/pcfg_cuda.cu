@@ -146,6 +146,195 @@ void pcfg_sample_string_expression_cuda_impl(
         B);
 }
 
+__global__ void parse_to_prefix_kernel(
+    const torch::PackedTensorAccessor32<int64_t, 1> precedence,
+    const torch::PackedTensorAccessor32<int64_t, 2> expressions,
+    torch::PackedTensorAccessor32<int64_t, 2> ops,
+    torch::PackedTensorAccessor32<int64_t, 3> children,
+    torch::PackedTensorAccessor32<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B,
+    int64_t M)
+{
+    int32_t b = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= B)
+        return;
+
+    errors[b] = 0;
+    int32_t op_stack[HARD_MAX_LENGTH];
+    int32_t op_stack_ptr = 0;
+    int32_t out_queue[HARD_MAX_LENGTH];
+    int32_t out_queue_size = 0;
+
+    int32_t expression_len = 0;
+    while (expression_len < M && expressions[b][expression_len] != NO_OP)
+    {
+        expression_len++;
+    }
+
+    for (int32_t i = expression_len - 1; i >= 0; --i)
+    {
+        const int32_t token = expressions[b][i];
+        if (precedence[token] == 0)
+        { // Terminal
+            if (out_queue_size >= HARD_MAX_LENGTH)
+            {
+                errors[b] = 1; // Postfix expression too long
+                return;
+            }
+            out_queue[out_queue_size++] = token;
+        }
+        else if (token == rparenthesis_id) // Treat as lparenthesis
+        {
+            if (op_stack_ptr >= HARD_MAX_LENGTH)
+            {
+                errors[b] = 2; // Operator stack overflow
+                return;
+            }
+            op_stack[op_stack_ptr++] = token;
+        }
+        else if (token == lparenthesis_id) // Treat as rparenthesis
+        {
+            while (op_stack_ptr > 0 && op_stack[op_stack_ptr - 1] != rparenthesis_id)
+            {
+                if (out_queue_size >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 1; // Postfix expression too long
+                    return;
+                }
+                out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+            }
+            if (op_stack_ptr == 0)
+            {
+                errors[b] = 3; // Mismatched parenthesis
+                return;
+            }
+            op_stack_ptr--; // Pop rparenthesis
+        }
+        else
+        { // Operator
+            while (op_stack_ptr > 0 && op_stack[op_stack_ptr - 1] != rparenthesis_id &&
+                   ((is_left_associative(token) && precedence[op_stack[op_stack_ptr - 1]] > precedence[token]) ||
+                    (is_right_associative(token) && precedence[op_stack[op_stack_ptr - 1]] >= precedence[token])))
+            {
+                if (out_queue_size >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 1; // Postfix expression too long
+                    return;
+                }
+                out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+            }
+            if (op_stack_ptr >= HARD_MAX_LENGTH)
+            {
+                errors[b] = 2; // Operator stack overflow
+                return;
+            }
+            op_stack[op_stack_ptr++] = token;
+        }
+    }
+
+    while (op_stack_ptr > 0)
+    {
+        if (op_stack[op_stack_ptr - 1] == rparenthesis_id)
+        {
+            errors[b] = 3; // Mismatched parenthesis
+            return;
+        }
+        if (out_queue_size >= HARD_MAX_LENGTH)
+        {
+            errors[b] = 1; // Postfix expression too long
+            return;
+        }
+        out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+    }
+
+    // Reverse the output queue to get prefix
+    for (int32_t i = 0; i < out_queue_size; ++i)
+    {
+        ops[b][i] = out_queue[out_queue_size - 1 - i];
+    }
+    for (int32_t i = out_queue_size; i < M; ++i)
+    {
+        ops[b][i] = NO_OP; // padding
+    }
+
+    // Re-use out_queue to store the prefix expression for child calculation
+    for (int32_t i = 0; i < out_queue_size; ++i)
+    {
+        out_queue[i] = ops[b][i];
+    }
+
+    int32_t child_stack[HARD_MAX_LENGTH];
+    int32_t child_stack_ptr = 0;
+    for (int32_t i = out_queue_size - 1; i >= 0; i--)
+    {
+        int32_t token = out_queue[i];
+        if (is_unary(token))
+        {
+            if (child_stack_ptr < 1)
+            {
+                errors[b] = 5; // Unary operator without operand
+                return;
+            }
+            int32_t child_index = child_stack[--child_stack_ptr];
+            children[b][i][0] = child_index;
+            children[b][i][1] = NULL_CHILD;
+        }
+        else if (is_binary(token))
+        {
+            if (child_stack_ptr < 2)
+            {
+                errors[b] = 6; // Binary operator without enough operands
+                return;
+            }
+            int32_t left_child_index = child_stack[--child_stack_ptr];
+            int32_t right_child_index = child_stack[--child_stack_ptr];
+            children[b][i][0] = left_child_index;
+            children[b][i][1] = right_child_index;
+        }
+        else
+        {
+            // no children
+            children[b][i][0] = NULL_CHILD;
+            children[b][i][1] = NULL_CHILD;
+        }
+        if (child_stack_ptr >= HARD_MAX_LENGTH)
+        {
+            errors[b] = 7; // Child stack overflow
+            return;
+        }
+        child_stack[child_stack_ptr++] = i;
+    }
+    if (out_queue_size > 0 && child_stack_ptr != 1)
+        errors[b] = 8; // Malformed expression (e.g., too many operands)
+}
+
+void parse_to_prefix_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 1> precedence,
+    const torch::PackedTensorAccessor32<int64_t, 2> expressions,
+    torch::PackedTensorAccessor32<int64_t, 2> ops,
+    torch::PackedTensorAccessor32<int64_t, 3> children,
+    torch::PackedTensorAccessor32<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B,
+    int64_t M)
+{
+    const int threads = THREAD_COUNT;
+    const int blocks = (B + threads - 1) / threads;
+    parse_to_prefix_kernel<<<blocks, threads>>>(
+        precedence,
+        expressions,
+        ops,
+        children,
+        errors,
+        lparenthesis_id,
+        rparenthesis_id,
+        B,
+        M);
+}
+
 __global__ void parse_to_postfix_kernel(
     const torch::PackedTensorAccessor32<int64_t, 1> precedence,
     const torch::PackedTensorAccessor32<int64_t, 2> expressions,
@@ -209,7 +398,7 @@ __global__ void parse_to_postfix_kernel(
         else
         { // Operator
             while (op_stack_ptr > 0 && op_stack[op_stack_ptr - 1] != lparenthesis_id &&
-                   ((!is_right_associative(token) && precedence[op_stack[op_stack_ptr - 1]] >= precedence[token]) ||
+                   ((is_left_associative(token) && precedence[op_stack[op_stack_ptr - 1]] >= precedence[token]) ||
                     (is_right_associative(token) && precedence[op_stack[op_stack_ptr - 1]] > precedence[token])))
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)

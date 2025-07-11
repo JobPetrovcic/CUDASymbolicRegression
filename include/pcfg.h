@@ -22,7 +22,7 @@ We also create a slower C++ version of this generation that uses multithreading 
 */
 
 constexpr float DEFAULT_tolerence = 1e-6f;
-class ProbababilisticContextFreeGrammar
+class ProbabilisticContextFreeGrammar
 {
 public:
     /*
@@ -33,14 +33,26 @@ public:
     - It sorts rules by non-terminal to group them.
     - It computes the final pointer (`_ptr`) and cumulative probability (`_cum_probs`) tensors.
     */
-    ProbababilisticContextFreeGrammar(std::string grammar, std::string start_symbol, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries = 100, float tolerance = DEFAULT_tolerence, bool verbose = false);
-    ~ProbababilisticContextFreeGrammar();
+    ProbabilisticContextFreeGrammar(std::string grammar, std::string start_symbol, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries = 100, float tolerance = DEFAULT_tolerence, bool verbose = false);
+    ~ProbabilisticContextFreeGrammar();
     std::tuple<torch::Tensor, torch::Tensor> sample(int64_t B);
     torch::Tensor sample_string_expression(int64_t B);
     std::vector<std::string> to_string(torch::Tensor expressions);
+    std::tuple<torch::Tensor, torch::Tensor> parse_to_prefix(torch::Tensor expressions);
     std::tuple<torch::Tensor, torch::Tensor> parse_to_postfix(torch::Tensor expressions);
 
     torch::Device device;
+
+    // Getters symbol
+    int64_t get_symbol_id(const std::string &symbol) const
+    {
+        auto it = this->symbol_to_id.find(symbol);
+        if (it != this->symbol_to_id.end())
+        {
+            return it->second;
+        }
+        throw std::runtime_error("Symbol not found: " + symbol);
+    }
 
 private:
     std::string start_symbol;
@@ -61,6 +73,8 @@ private:
     void get_initial_symbol_map_and_precedence(int64_t n_variables);
     int64_t get_token_id(std::string s);
     std::vector<int64_t> parse_sides(std::string s, std::string line);
+
+    void process_parsing_errors(const torch::Tensor &errors, const std::string &expression_type);
 
     torch::Tensor id_to_pos;
     torch::Tensor rule_lhs;          // Shape: (num_rules,)

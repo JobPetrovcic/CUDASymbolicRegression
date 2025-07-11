@@ -8,26 +8,14 @@ from typing import List, Optional
 import symbolic_torch
 #torch.autograd.set_detect_anomaly(True)
 
-# Define operators from operators.h
-NO_OP: int = 0
-LEARNABLE_CONSTANT: int = 1
-CONST_1: int = 2
-SIN: int = 6
-COS: int = 7
-EXP: int = 8
-LOG: int = 9
-SQUARE: int = 10
-SQRT: int = 11
-ADD: int = 12
-SUB: int = 13
-MUL: int = 14
-DIV: int = 15
-VAR_START_ID: int = 16
+from symbolic_torch.evaluation import evaluate_backend
+from symbolic_torch import Operator
 
 NULL_CHILD = -1
 
-unary_ops: List[int] = [SIN, COS, EXP, LOG, SQUARE, SQRT]
-binary_ops: List[int] = [ADD, SUB, MUL, DIV]
+unary_ops: List[int] = [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQUARE), int(Operator.SQRT)]
+binary_ops: List[int] = [int(Operator.ADD), int(Operator.SUB), int(Operator.MUL), int(Operator.DIV), int(Operator.POW)]
+
 all_ops: List[int] = unary_ops + binary_ops
 
 def get_arity(op : int) -> int:
@@ -43,7 +31,7 @@ def build_and_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_ten
     ch_tensor = ch_tensor.to(device)
     c_tensor = c_tensor.to(device)
     
-    y = symbolic_torch.evaluate(x_tensor, ops_tensor, ch_tensor, c_tensor)
+    y = evaluate_backend(x_tensor, ops_tensor, ch_tensor, c_tensor)
     return y
 
 def build_and_run_with_grad(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor: Tensor, grad_output : Tensor, null_nan_output_grad : bool, device: str = 'cpu', use_custom_kernel: bool = True):
@@ -53,7 +41,7 @@ def build_and_run_with_grad(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Ten
     c_tensor = c_tensor.clone().detach().to(device).requires_grad_(True)
 
     if use_custom_kernel:
-        y = symbolic_torch.evaluate(x_tensor, ops_tensor, ch_tensor, c_tensor)
+        y = evaluate_backend(x_tensor, ops_tensor, ch_tensor, c_tensor)
     else:
         y = manual_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     
@@ -62,7 +50,6 @@ def build_and_run_with_grad(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Ten
     # check that grad_output is 0 where output is NaN
     grad_output = grad_output.to(device)
 
-    
     if null_nan_output_grad:
         grad_output[torch.isnan(output)] = 0
     
@@ -83,7 +70,7 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
     
     # Map learnable constant indices
     posC: Tensor = -torch.ones_like(ops_tensor)
-    const_indices = (ops_tensor == LEARNABLE_CONSTANT).nonzero(as_tuple=True)
+    const_indices = (ops_tensor == int(Operator.LEARNABLE_CONSTANT)).nonzero(as_tuple=True)
     posC[const_indices] = torch.arange(len(const_indices[0]), device=device)
 
     # WARNING: We do NOT add epsilon for stability here, as we want it to match the nan output of the C++ kernel.
@@ -95,7 +82,7 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
             # For each expression in the batch
             op = int(ops_tensor[k, b].item())
 
-            if op == NO_OP:
+            if op == int(Operator.NO_OP):
                 # Append a column of NaNs for this expression in the batch
                 batch_results.append(torch.full((N, 1), float('nan'), dtype=x_tensor.dtype, device=device))
                 continue
@@ -113,37 +100,47 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
                     arg1 = cache_list[int(ch1_idx)][:, b]
 
             res: Optional[Tensor] = None
-            if op == LEARNABLE_CONSTANT:
+            if op == int(Operator.LEARNABLE_CONSTANT):
                 c_idx = posC[k, b].item()
                 if c_idx != NULL_CHILD:
                     res = c_tensor[int(c_idx)].expand(N)
-            elif op == CONST_1:
+            elif op == int(Operator.CONST_1):
                 res = torch.full((N,), 1.0, dtype=x_tensor.dtype, device=device)
-            elif op >= VAR_START_ID:
-                var_idx = op - VAR_START_ID
+            elif op == int(Operator.CONST_2):
+                res = torch.full((N,), 2.0, dtype=x_tensor.dtype, device=device)
+            elif op == int(Operator.CONST_3):
+                res = torch.full((N,), 3.0, dtype=x_tensor.dtype, device=device)
+            elif op == int(Operator.CONST_4):
+                res = torch.full((N,), 4.0, dtype=x_tensor.dtype, device=device)
+            elif op == int(Operator.CONST_5):
+                res = torch.full((N,), 5.0, dtype=x_tensor.dtype, device=device)
+            elif op >= int(Operator.VAR_START_ID):
+                var_idx = op - int(Operator.VAR_START_ID)
                 res = x_tensor[:, int(var_idx)]
             elif arity > 0 and arg0 is not None:
-                if op == SIN:
+                if op == int(Operator.SIN):
                     res = torch.sin(arg0)
-                elif op == COS:
+                elif op == int(Operator.COS):
                     res = torch.cos(arg0)
-                elif op == EXP:
+                elif op == int(Operator.EXP):
                     res = torch.exp(arg0)
-                elif op == LOG:
+                elif op == int(Operator.LOG):
                     res = torch.log(arg0)
-                elif op == SQUARE:
+                elif op == int(Operator.SQUARE):
                     res = arg0 * arg0
-                elif op == SQRT:
+                elif op == int(Operator.SQRT):
                     res = torch.sqrt(arg0)
                 elif arity > 1 and arg1 is not None:
-                    if op == ADD:
+                    if op == int(Operator.ADD):
                         res = arg0 + arg1
-                    elif op == SUB:
+                    elif op == int(Operator.SUB):
                         res = arg0 - arg1
-                    elif op == MUL:
+                    elif op == int(Operator.MUL):
                         res = arg0 * arg1
-                    elif op == DIV:
+                    elif op == int(Operator.DIV):
                         res = arg0 / arg1
+                    elif op == int(Operator.POW):
+                        res = torch.pow(arg0, arg1)
             
             if res is not None:
                 batch_results.append(res.view(N, 1))
@@ -160,11 +157,11 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
 def test_noop_nan(device : str) -> None:
     # If noop is used, the output should be NaN
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
-    ops_tensor = torch.tensor([[NO_OP]], dtype=torch.int64)
+    ops_tensor = torch.tensor([[int(Operator.NO_OP)]], dtype=torch.int64)
     ch_tensor = -torch.ones(1, 1, 2, dtype=torch.int64)
     c_tensor = symbolic_torch.create_constants(ops_tensor)
     custom_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
-    assert torch.isnan(custom_res).all(), "Expected output to be NaN when using NO_OP"
+    assert torch.isnan(custom_res).all(), "Expected output to be NaN when using Operator.NO_OP"
 
     N = x_tensor.shape[0]
     B = ops_tensor.shape[-1]
@@ -194,7 +191,7 @@ def test_validate_inputs_arity(device : str) -> None:
 
         # Set up dummy child nodes
         for i in range(arity):
-            ops_tensor[i, 0] = VAR_START_ID + i
+            ops_tensor[i, 0] = int(Operator.VAR_START_ID) + i
         
         # Set the operator
         ops_tensor[arity, 0] = op
@@ -222,13 +219,13 @@ def test_validate_inputs_arity(device : str) -> None:
         elif arity == 1:
             # For unary ops, test with one too few children.
             # This is only an error if the result is used by another node.
-            # M=0: VAR_START_ID
+            # M=0: Operator.VAR_START_ID
             # M=1: op (unary) with invalid child
-            # M=2: ADD(M=0, M=1)
+            # M=2: Operator.ADD(M=0, M=1)
             ops_tensor_unary_fail = torch.tensor([
-                [VAR_START_ID],
+                [int(Operator.VAR_START_ID)],
                 [op],
-                [ADD]
+                [int(Operator.ADD)]
             ], dtype=torch.int64)
             ch_tensor_unary_fail = -torch.ones(3, 1, 2, dtype=torch.int64)
             ch_tensor_unary_fail[1, 0, 0] = NULL_CHILD # Invalid child for the unary op
@@ -241,7 +238,7 @@ def test_validate_inputs_arity(device : str) -> None:
 
 def test_validate_inputs_child_index_too_large(device : str) -> None:
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
-    ops_tensor = torch.tensor([[VAR_START_ID], [ADD]], dtype=torch.int64)
+    ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.ADD)]], dtype=torch.int64)
     ch_tensor = -torch.ones(2, 1, 2, dtype=torch.int64)
     ch_tensor[1, 0, 0] = 0
     ch_tensor[1, 0, 1] = 2 # Invalid, should be < k=1
@@ -270,7 +267,7 @@ def test_validate_inputs_binary_op_no_children(device: str) -> None:
 # 2. Test datatype checking
 def test_wrong_datatypes(device : str) -> None:
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
-    ops_tensor = torch.tensor([[VAR_START_ID]], dtype=torch.int64)
+    ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)]], dtype=torch.int64)
     ch_tensor = -torch.ones(1, 1, 2, dtype=torch.int64)
     c_tensor = torch.randn(0, dtype=torch.float32)
 
@@ -294,7 +291,7 @@ def test_single_op(device : str, op : int) -> None:
     ch_tensor = -torch.ones(1 + arity, 1, 2, dtype=torch.int64)
 
     for i in range(arity):
-        ops_tensor[i, 0] = VAR_START_ID + i
+        ops_tensor[i, 0] = int(Operator.VAR_START_ID) + i
         ch_tensor[arity, 0, i] = i
     ops_tensor[arity, 0] = op
 
@@ -309,9 +306,9 @@ def test_batching(device : str) -> None:
     # Tree 1: X0 + X1
     # Tree 2: sin(X0)
     ops_tensor = torch.tensor([
-        [VAR_START_ID, VAR_START_ID],
-        [VAR_START_ID+1, NO_OP],
-        [ADD, SIN]
+        [int(Operator.VAR_START_ID), int(Operator.VAR_START_ID)],
+        [int(Operator.VAR_START_ID)+1, int(Operator.NO_OP)],
+        [int(Operator.ADD), int(Operator.SIN)]
     ], dtype=torch.int64)
     ch_tensor = -torch.ones(3, 2, 2, dtype=torch.int64)
     ch_tensor[2, 0, 0] = 0
@@ -328,7 +325,7 @@ def test_batching(device : str) -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_cpu_gpu_match() -> None:
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
-    ops_tensor = torch.tensor([[VAR_START_ID], [VAR_START_ID+1], [ADD]], dtype=torch.int64)
+    ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.VAR_START_ID)+1], [int(Operator.ADD)]], dtype=torch.int64)
     ch_tensor = -torch.ones(3, 1, 2, dtype=torch.int64)
     ch_tensor[2, 0, 0] = 0
     ch_tensor[2, 0, 1] = 1
@@ -349,11 +346,11 @@ def test_complex_expression(device : str) -> None:
     # M=3: X0 * X1 (M=0 * M=1)
     # M=4: sin(X1) + X0*X1 (M=2 + M=3)
     ops_tensor = torch.tensor([
-        [VAR_START_ID],
-        [VAR_START_ID + 1],
-        [SIN],
-        [MUL],
-        [ADD]
+        [int(Operator.VAR_START_ID)],
+        [int(Operator.VAR_START_ID) + 1],
+        [int(Operator.SIN)],
+        [int(Operator.MUL)],
+        [int(Operator.ADD)]
     ], dtype=torch.int64)
     ch_tensor = -torch.ones(5, 1, 2, dtype=torch.int64)
     ch_tensor[2, 0, 0] = 1 # sin(X1)
@@ -374,9 +371,9 @@ def test_constants(device : str) -> None:
     # M=1: 1 (const)
     # M=2: C0 + 1
     ops_tensor = torch.tensor([
-        [LEARNABLE_CONSTANT],
-        [CONST_1],
-        [ADD]
+        [int(Operator.LEARNABLE_CONSTANT)],
+        [int(Operator.CONST_1)],
+        [int(Operator.ADD)]
     ], dtype=torch.int64)
     ch_tensor = -torch.ones(3, 1, 2, dtype=torch.int64)
     ch_tensor[2, 0, 0] = 0
@@ -396,7 +393,7 @@ def test_constants(device : str) -> None:
     assert torch.allclose(custom_res.to(device), expected_res.to(device), atol=1e-6)
 
     # Test sin(C)
-    ops_tensor = torch.tensor([[LEARNABLE_CONSTANT], [SIN]], dtype=torch.int64)
+    ops_tensor = torch.tensor([[int(Operator.LEARNABLE_CONSTANT)], [int(Operator.SIN)]], dtype=torch.int64)
     ch_tensor = -torch.ones(2, 1, 2, dtype=torch.int64)
     ch_tensor[1, 0, 0] = 0
     c_tensor = torch.tensor([3.14], dtype=torch.float32).to(device)
@@ -421,12 +418,12 @@ def test_gradients(device: str, op: int) -> None:
     c_tensor = symbolic_torch.create_constants(ops_tensor).to(device)
 
     for i in range(arity):
-        ops_tensor[i, 0] = VAR_START_ID + i
+        ops_tensor[i, 0] = int(Operator.VAR_START_ID) + i
         ch_tensor[arity, 0, i] = i
     ops_tensor[arity, 0] = op
 
     # Special case for log to test negative inputs
-    #if op == LOG:
+    #if op == int(Operator.LOG:
     #    x_tensor = torch.abs(x_tensor) * -1 # Ensure negative inputs for log
 
     N = x_tensor.shape[0]
@@ -450,14 +447,14 @@ def test_benchmark() -> None:
     # A moderately complex expression
     # (X0 + X1) * sin(X2 - C)
     ops_tensor = torch.tensor([
-        [VAR_START_ID],
-        [VAR_START_ID + 1],
-        [VAR_START_ID + 2],
-        [LEARNABLE_CONSTANT],
-        [ADD], # X0+X1
-        [SUB], # X2-C
-        [SIN], # sin(X2-C)
-        [MUL]  # (X0+X1)*sin(X2-C)
+        [int(Operator.VAR_START_ID)],
+        [int(Operator.VAR_START_ID) + 1],
+        [int(Operator.VAR_START_ID) + 2],
+        [int(Operator.LEARNABLE_CONSTANT)],
+        [int(Operator.ADD)], # X0+X1
+        [int(Operator.SUB)], # X2-C
+        [int(Operator.SIN)], # sin(X2-C)
+        [int(Operator.MUL)]  # (X0+X1)*sin(X2-C)
     ], dtype=torch.int64).expand(-1, B)
     
     ch_tensor = -torch.ones(8, B, 2, dtype=torch.int64)
@@ -500,26 +497,26 @@ def test_large_benchmark() -> None:
     # A more complex expression:
     # log( (sin(X0) + cos(X1)) * (exp(X2) - sqrt(X3)) ) + (X4 * X5) - (X6 / X7)
     ops_tensor = torch.tensor([
-        [VAR_START_ID + 0],      # M=0: X0
-        [VAR_START_ID + 1],      # M=1: X1
-        [VAR_START_ID + 2],      # M=2: X2
-        [VAR_START_ID + 3],      # M=3: X3
-        [VAR_START_ID + 4],      # M=4: X4
-        [VAR_START_ID + 5],      # M=5: X5
-        [VAR_START_ID + 6],      # M=6: X6
-        [VAR_START_ID + 7],      # M=7: X7
-        [SIN],                   # M=8: sin(X0)
-        [COS],                   # M=9: cos(X1)
-        [EXP],                   # M=10: exp(X2)
-        [SQRT],                  # M=11: sqrt(X3)
-        [ADD],                   # M=12: sin(X0) + cos(X1)
-        [SUB],                   # M=13: exp(X2) - sqrt(X3)
-        [MUL],                   # M=14: (sin(X0) + cos(X1)) * (exp(X2) - sqrt(X3))
-        [LOG],                   # M=15: log(...)
-        [MUL],                   # M=16: X4 * X5
-        [DIV],                   # M=17: X6 / X7
-        [ADD],                   # M=18: log(...) + (X4 * X5)
-        [SUB]                    # M=19: ... - (X6 / X7)
+        [int(Operator.VAR_START_ID) + 0],      # M=0: X0
+        [int(Operator.VAR_START_ID) + 1],      # M=1: X1
+        [int(Operator.VAR_START_ID) + 2],      # M=2: X2
+        [int(Operator.VAR_START_ID) + 3],      # M=3: X3
+        [int(Operator.VAR_START_ID) + 4],      # M=4: X4
+        [int(Operator.VAR_START_ID) + 5],      # M=5: X5
+        [int(Operator.VAR_START_ID) + 6],      # M=6: X6
+        [int(Operator.VAR_START_ID) + 7],      # M=7: X7
+        [int(Operator.SIN)],                   # M=8: sin(X0)
+        [int(Operator.COS)],                   # M=9: cos(X1)
+        [int(Operator.EXP)],                   # M=10: exp(X2)
+        [int(Operator.SQRT)],                  # M=11: sqrt(X3)
+        [int(Operator.ADD)],                   # M=12: sin(X0) + cos(X1)
+        [int(Operator.SUB)],                   # M=13: exp(X2) - sqrt(X3)
+        [int(Operator.MUL)],                   # M=14: (sin(X0) + cos(X1)) * (exp(X2) - sqrt(X3))
+        [int(Operator.LOG)],                   # M=15: log(...)
+        [int(Operator.MUL)],                   # M=16: X4 * X5
+        [int(Operator.DIV)],                   # M=17: X6 / X7
+        [int(Operator.ADD)],                   # M=18: log(...) + (X4 * X5)
+        [int(Operator.SUB)]                    # M=19: ... - (X6 / X7)
     ], dtype=torch.int64).expand(-1, B)
 
     ch_tensor = -torch.ones(20, B, 2, dtype=torch.int64)
@@ -565,10 +562,9 @@ def test_large_benchmark() -> None:
 
 # 10. Test error handling for gradients on invalid operations
 @pytest.mark.parametrize("op", [
-    NO_OP,
-    LOG,
-    SQRT,
-    DIV,
+    Operator.NO_OP,
+    Operator.LOG,
+    Operator.DIV, 
 ])
 def test_gradient_on_invalid_op(op: int, device: str):
     B, N, n_x = 1, 1, 2
@@ -576,27 +572,27 @@ def test_gradient_on_invalid_op(op: int, device: str):
     c_tensor = torch.ones((0, ), dtype=torch.float32)  # No constants needed for this test
     grad_output = torch.ones(N, B, dtype=torch.float32)
 
-    if op == LOG:
+    if op == int(Operator.LOG):
         # log(0)
-        ops_tensor = torch.tensor([[VAR_START_ID], [LOG]], dtype=torch.int64).expand(-1, B)
+        ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.LOG)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(2, B, 2, dtype=torch.int64)
         ch_tensor[1, :, 0] = 0
         x_tensor[0, 0] = 0
-    elif op == SQRT:
+    elif op == int(Operator.SQRT):
         # sqrt(-1)
-        ops_tensor = torch.tensor([[VAR_START_ID], [SQRT]], dtype=torch.int64).expand(-1, B)
+        ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.SQRT)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(2, B, 2, dtype=torch.int64)
         ch_tensor[1, :, 0] = 0
         x_tensor[0, 0] = -1
-    elif op == DIV:
+    elif op == int(Operator.DIV):
         # 1/0
-        ops_tensor = torch.tensor([[CONST_1], [VAR_START_ID], [DIV]], dtype=torch.int64).expand(-1, B)
+        ops_tensor = torch.tensor([[int(Operator.CONST_1)], [int(Operator.VAR_START_ID)], [int(Operator.DIV)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(3, B, 2, dtype=torch.int64)
         ch_tensor[2, :, 0] = 0
         ch_tensor[2, :, 1] = 1
         x_tensor[0, 0] = 0
-    elif op == NO_OP:
-        ops_tensor = torch.tensor([[NO_OP]], dtype=torch.int64).expand(-1, B)
+    elif op == int(Operator.NO_OP):
+        ops_tensor = torch.tensor([[int(Operator.NO_OP)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(1, B, 2, dtype=torch.int64)
     else:
         raise ValueError(f"Unsupported operator for gradient test: {op}")

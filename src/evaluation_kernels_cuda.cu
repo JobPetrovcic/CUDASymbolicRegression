@@ -106,6 +106,24 @@ __global__ void evaluation_forward_step_k_kernel(
     case CONST_1:
         result = static_cast<scalar_t>(1.0);
         break;
+    case CONST_2:
+        result = static_cast<scalar_t>(2.0);
+        break;
+    case CONST_3:
+        result = static_cast<scalar_t>(3.0);
+        break;
+    case CONST_4:
+        result = static_cast<scalar_t>(4.0);
+        break;
+    case CONST_5:
+        result = static_cast<scalar_t>(5.0);
+        break;
+    case PI:
+        result = static_cast<scalar_t>(M_PI); // Use a more precise value for PI
+        break;
+    case E:
+        result = static_cast<scalar_t>(M_E); // Use a more precise value for E
+        break;
     case SIN:
         result = sin_wrapper(arg0);
         break;
@@ -135,6 +153,9 @@ __global__ void evaluation_forward_step_k_kernel(
         break;
     case DIV:
         result = div_wrapper(arg0, arg1);
+        break;
+    case POW:
+        result = pow_wrapper(arg0, arg1);
         break;
     default:
     {
@@ -290,6 +311,7 @@ __global__ void evaluation_backward_step_k_kernel(
     }
     case DIV:
     {
+        // TODO: clean this up a bit
         if (g_in == static_cast<scalar_t>(0.0))
             return;
         int64_t ch0_idx = ch_acc[k][b_global][0];
@@ -305,8 +327,33 @@ __global__ void evaluation_backward_step_k_kernel(
         }
         else
         {
-            g_out0 = g_in / arg1;
-            g_out1 = -g_in * arg0 / (arg1 * arg1);
+            g_out0 = div_wrapper(g_in, arg1);
+            g_out1 = -div_wrapper(g_in * arg0, mul_wrapper(arg1, arg1));
+        }
+        gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
+        gpuAtomicAdd(&grad_cache_acc[ch1_idx][n_global][b_global], g_out1);
+        break;
+    }
+    case POW:
+    {
+        // TODO: clean this up a bit
+        int64_t ch0_idx = ch_acc[k][b_global][0];
+        int64_t ch1_idx = ch_acc[k][b_global][1];
+        scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
+        scalar_t arg1 = cache_acc[ch1_idx][n_global][b_global];
+        scalar_t g_out0, g_out1;
+        if (arg0 < static_cast<scalar_t>(0.0))
+        {
+            // atomicExch(error_flag_ptr, 6); // Error code 6 for gradient on invalid pow
+            g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+            g_out1 = std::numeric_limits<scalar_t>::quiet_NaN();
+        }
+        else
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                return;
+            g_out0 = mul_wrapper(g_in, mul_wrapper(pow_wrapper(arg0, sub_wrapper(arg1, static_cast<scalar_t>(1.0))), arg1));
+            g_out1 = mul_wrapper(g_in, mul_wrapper(log_wrapper(arg0), pow_wrapper(arg0, arg1)));
         }
         gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
         gpuAtomicAdd(&grad_cache_acc[ch1_idx][n_global][b_global], g_out1);
@@ -343,19 +390,14 @@ __global__ void evaluation_backward_step_k_kernel(
         //     g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
         // }
 
-        if (g_in == static_cast<scalar_t>(0.0))
-            g_out0 = std::numeric_limits<scalar_t>::quiet_NaN(); // Return NaN for zero gradient
+        if (arg0 < static_cast<scalar_t>(0.0))
+            g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
         else
         {
-            if (arg0 <= static_cast<scalar_t>(0.0))
-            {
-                atomicExch(error_flag_ptr, 4);       // Error code 4 for gradient on invalid sqrt
-                g_out0 = static_cast<scalar_t>(0.0); // Return NaN for invalid sqrt
-            }
+            if (g_in == static_cast<scalar_t>(0.0))
+                g_out0 = static_cast<scalar_t>(0.0); // Return zero gradient if incoming gradient is zero
             else
-            {
                 g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
-            }
         }
 
         gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
