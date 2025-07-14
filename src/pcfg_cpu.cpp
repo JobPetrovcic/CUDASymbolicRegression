@@ -283,6 +283,185 @@ void parse_to_prefix_cpu_impl(
     }
 }
 
+void parse_to_prefix_parent_cpu_impl(
+    const torch::TensorAccessor<int64_t, 1> precedence_acc,
+    const torch::TensorAccessor<int64_t, 2> expressions_acc,
+    torch::TensorAccessor<int64_t, 2> ops_acc,
+    torch::TensorAccessor<int64_t, 2> parents_acc,
+    torch::TensorAccessor<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B, int64_t M)
+{
+#pragma omp parallel for
+    for (int32_t b = 0; b < B; ++b)
+    {
+        errors[b] = 0;
+        int32_t op_stack[HARD_MAX_LENGTH];
+        int32_t op_stack_ptr = 0;
+        int32_t out_queue[HARD_MAX_LENGTH];
+        int32_t out_queue_size = 0;
+
+        int32_t expression_len = 0;
+        while (expression_len < M && expressions_acc[b][expression_len] != NO_OP)
+        {
+            expression_len++;
+        }
+
+        for (int32_t i = expression_len - 1; i >= 0; --i)
+        {
+            const int32_t &token = expressions_acc[b][i];
+            if (precedence_acc[token] == 0)
+            {
+                if (out_queue_size >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 1;
+                    break;
+                }
+                out_queue[out_queue_size++] = token;
+            }
+            else if (token == rparenthesis_id)
+            {
+                if (op_stack_ptr >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 2;
+                    break;
+                }
+                op_stack[op_stack_ptr++] = token;
+            }
+            else if (token == lparenthesis_id)
+            {
+                while (op_stack_ptr > 0 && op_stack[op_stack_ptr - 1] != rparenthesis_id)
+                {
+                    if (out_queue_size >= HARD_MAX_LENGTH)
+                    {
+                        errors[b] = 1;
+                        break;
+                    }
+                    out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+                }
+                if (op_stack_ptr == 0)
+                {
+                    errors[b] = 3;
+                    break;
+                }
+                op_stack_ptr--;
+            }
+            else
+            {
+                while (op_stack_ptr > 0 && op_stack[op_stack_ptr - 1] != rparenthesis_id &&
+                       ((is_left_associative(token) && precedence_acc[op_stack[op_stack_ptr - 1]] > precedence_acc[token]) ||
+                        (is_right_associative(token) && precedence_acc[op_stack[op_stack_ptr - 1]] >= precedence_acc[token])))
+                {
+                    if (out_queue_size >= HARD_MAX_LENGTH)
+                    {
+                        errors[b] = 1;
+                        break;
+                    }
+                    out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+                }
+                if (op_stack_ptr >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 2;
+                    break;
+                }
+                op_stack[op_stack_ptr++] = token;
+            }
+            if (errors[b] != 0)
+                break;
+        }
+        if (errors[b] != 0)
+            continue;
+
+        while (op_stack_ptr > 0)
+        {
+            if (op_stack[op_stack_ptr - 1] == rparenthesis_id)
+            {
+                errors[b] = 3;
+                break;
+            }
+            if (out_queue_size >= HARD_MAX_LENGTH)
+            {
+                errors[b] = 1;
+                break;
+            }
+            out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+        }
+        if (errors[b] != 0)
+            continue;
+
+        // Reverse the output queue to get prefix and write to ops_acc tensor
+        for (int32_t i = 0; i < out_queue_size; ++i)
+        {
+            ops_acc[b][i] = out_queue[out_queue_size - 1 - i];
+        }
+        for (int32_t i = out_queue_size; i < M; ++i)
+        {
+            ops_acc[b][i] = NO_OP;
+        }
+
+        // Initialize parents_acc tensor
+        for (int32_t i = 0; i < out_queue_size; ++i)
+        {
+            parents_acc[b][i] = NULL_PARENT;
+        }
+        for (int32_t i = out_queue_size; i < M; ++i)
+        {
+            parents_acc[b][i] = NO_OP;
+        }
+        if (out_queue_size == 0)
+            continue;
+
+        // Re-use out_queue to store the prefix expression for parent calculation
+        for (int32_t i = 0; i < out_queue_size; ++i)
+        {
+            out_queue[i] = ops_acc[b][i];
+        }
+
+        int32_t node_stack[HARD_MAX_LENGTH];
+        int32_t node_stack_ptr = 0;
+        for (int32_t i = out_queue_size - 1; i >= 0; i--)
+        {
+            int32_t token = out_queue[i];
+            if (is_unary(token))
+            {
+                if (node_stack_ptr < 1)
+                {
+                    errors[b] = 5;
+                    break;
+                }
+                int32_t child_index = node_stack[--node_stack_ptr];
+                parents_acc[b][child_index] = i;
+            }
+            else if (is_binary(token))
+            {
+                if (node_stack_ptr < 2)
+                {
+                    errors[b] = 6;
+                    break;
+                }
+                int32_t child1_index = node_stack[--node_stack_ptr];
+                int32_t child2_index = node_stack[--node_stack_ptr];
+                parents_acc[b][child1_index] = i;
+                parents_acc[b][child2_index] = i;
+            }
+            if (node_stack_ptr >= HARD_MAX_LENGTH)
+            {
+                errors[b] = 7;
+                break;
+            }
+            node_stack[node_stack_ptr++] = i;
+        }
+        if (errors[b] != 0)
+            continue;
+
+        if (out_queue_size > 0 && node_stack_ptr != 1)
+        {
+            errors[b] = 8;
+        }
+    }
+}
+
 void parse_to_postfix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> precedence_acc,
     const torch::TensorAccessor<int64_t, 2> expressions_acc,
@@ -439,5 +618,172 @@ void parse_to_postfix_cpu_impl(
         }
         if (out_queue_size > 0 && child_stack_ptr != 1)
             errors[b] = 8; // Malformed expression (e.g., too many operands)
+    }
+}
+
+void parse_to_postfix_parent_cpu_impl(
+    const torch::TensorAccessor<int64_t, 1> precedence_acc,
+    const torch::TensorAccessor<int64_t, 2> expressions_acc,
+    torch::TensorAccessor<int64_t, 2> ops_acc,
+    torch::TensorAccessor<int64_t, 2> parents_acc,
+    torch::TensorAccessor<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B, int64_t M)
+{
+#pragma omp parallel for
+    for (int32_t b = 0; b < B; ++b)
+    {
+        errors[b] = 0;
+        int32_t op_stack[HARD_MAX_LENGTH];
+        int32_t op_stack_ptr = 0;
+        int32_t out_queue[HARD_MAX_LENGTH];
+        int32_t out_queue_size = 0;
+
+        for (int32_t i = 0; i < M && expressions_acc[b][i] != NO_OP; ++i)
+        {
+            const int32_t &token = expressions_acc[b][i];
+            if (precedence_acc[token] == 0)
+            { // Terminal
+                if (out_queue_size >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 1;
+                    break;
+                }
+                out_queue[out_queue_size++] = token;
+            }
+            else if (token == lparenthesis_id)
+            {
+                if (op_stack_ptr >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 2;
+                    break;
+                }
+                op_stack[op_stack_ptr++] = token;
+            }
+            else if (token == rparenthesis_id)
+            {
+                while (op_stack_ptr > 0 && op_stack[op_stack_ptr - 1] != lparenthesis_id)
+                {
+                    if (out_queue_size >= HARD_MAX_LENGTH)
+                    {
+                        errors[b] = 1;
+                        break;
+                    }
+                    out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+                }
+                if (op_stack_ptr == 0)
+                {
+                    errors[b] = 3;
+                    break;
+                }
+                op_stack_ptr--; // Pop lparenthesis
+            }
+            else
+            { // Operator
+                while (op_stack_ptr > 0 && op_stack[op_stack_ptr - 1] != lparenthesis_id &&
+                       ((is_left_associative(token) && precedence_acc[op_stack[op_stack_ptr - 1]] >= precedence_acc[token]) ||
+                        (is_right_associative(token) && precedence_acc[op_stack[op_stack_ptr - 1]] > precedence_acc[token])))
+                {
+                    if (out_queue_size >= HARD_MAX_LENGTH)
+                    {
+                        errors[b] = 1;
+                        break;
+                    }
+                    out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+                }
+                if (op_stack_ptr >= HARD_MAX_LENGTH)
+                {
+                    errors[b] = 2;
+                    break;
+                }
+                op_stack[op_stack_ptr++] = token;
+            }
+            if (errors[b] != 0)
+                break;
+        }
+        if (errors[b] != 0)
+            continue;
+
+        while (op_stack_ptr > 0)
+        {
+            if (op_stack[op_stack_ptr - 1] == lparenthesis_id)
+            {
+                errors[b] = 3;
+                break;
+            }
+            if (out_queue_size >= HARD_MAX_LENGTH)
+            {
+                errors[b] = 1;
+                break;
+            }
+            out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
+        }
+        if (errors[b] != 0)
+            continue;
+
+        // Write postfix expression to ops_acc tensor
+        for (int32_t i = 0; i < out_queue_size; ++i)
+        {
+            ops_acc[b][i] = out_queue[i];
+        }
+        for (int32_t i = out_queue_size; i < M; ++i)
+        {
+            ops_acc[b][i] = NO_OP; // padding
+        }
+
+        // Initialize parents_acc tensor
+        for (int32_t i = 0; i < out_queue_size; ++i)
+        {
+            parents_acc[b][i] = NULL_PARENT;
+        }
+        for (int32_t i = out_queue_size; i < M; ++i)
+        {
+            parents_acc[b][i] = NO_OP; // padding
+        }
+        if (out_queue_size == 0)
+            continue;
+
+        int32_t node_stack[HARD_MAX_LENGTH];
+        int32_t node_stack_ptr = 0;
+        for (int32_t i = 0; i < out_queue_size; i++)
+        {
+            int32_t token = out_queue[i];
+            if (is_unary(token))
+            {
+                if (node_stack_ptr < 1)
+                {
+                    errors[b] = 5;
+                    break;
+                }
+                int32_t child_index = node_stack[--node_stack_ptr];
+                parents_acc[b][child_index] = i;
+            }
+            else if (is_binary(token))
+            {
+                if (node_stack_ptr < 2)
+                {
+                    errors[b] = 6;
+                    break;
+                }
+                int32_t right_child_index = node_stack[--node_stack_ptr];
+                int32_t left_child_index = node_stack[--node_stack_ptr];
+                parents_acc[b][right_child_index] = i;
+                parents_acc[b][left_child_index] = i;
+            }
+            if (node_stack_ptr >= HARD_MAX_LENGTH)
+            {
+                errors[b] = 7;
+                break;
+            }
+            node_stack[node_stack_ptr++] = i;
+        }
+        if (errors[b] != 0)
+            continue;
+
+        if (out_queue_size > 0 && node_stack_ptr != 1)
+        {
+            errors[b] = 8; // Malformed expression
+        }
     }
 }

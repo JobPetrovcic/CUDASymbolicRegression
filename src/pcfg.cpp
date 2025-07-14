@@ -602,6 +602,61 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
     return std::make_tuple(ops, children);
 }
 
+std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_prefix_parent(torch::Tensor expressions)
+{
+    // Check that only terminal symbols are used
+    TORCH_CHECK((0 <= expressions).all().item<bool>(),
+                "All symbols in the expressions must be non-negative integers.");
+    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
+                "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
+
+    int64_t B = expressions.size(0);
+    int64_t M = expressions.size(1);
+
+    if (M > HARD_MAX_LENGTH)
+    {
+        throw std::invalid_argument("M must be less than or equal to HARD_MAX_LENGTH, but got " + std::to_string(M) + " > " + std::to_string(HARD_MAX_LENGTH) + ".");
+    }
+
+    auto ops = torch::full({B, M}, NO_OP, expressions.options());
+    auto parents = torch::full({B, M}, NULL_CHILD, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    int64_t lparenthesis_id = get_token_id("(");
+    int64_t rparenthesis_id = get_token_id(")");
+
+    if (device.is_cuda())
+    {
+        parse_to_prefix_parent_cuda_impl(
+            this->precedence.packed_accessor32<int64_t, 1>(),
+            expressions.packed_accessor32<int64_t, 2>(),
+            ops.packed_accessor32<int64_t, 2>(),
+            parents.packed_accessor32<int64_t, 2>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            lparenthesis_id,
+            rparenthesis_id,
+            B,
+            M);
+    }
+    else
+    {
+        parse_to_prefix_parent_cpu_impl(
+            this->precedence.accessor<int64_t, 1>(),
+            expressions.accessor<int64_t, 2>(),
+            ops.accessor<int64_t, 2>(),
+            parents.accessor<int64_t, 2>(),
+            errors.accessor<int64_t, 1>(),
+            lparenthesis_id,
+            rparenthesis_id,
+            B,
+            M);
+    }
+
+    process_parsing_errors(errors, "prefix");
+
+    return std::make_tuple(ops, parents);
+}
+
 std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_postfix(torch::Tensor expressions)
 {
     // Check that only terminal symbols are used
@@ -699,6 +754,61 @@ std::vector<std::string> ProbabilisticContextFreeGrammar::to_string(torch::Tenso
     return results;
 }
 
+std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_postfix_parent(torch::Tensor expressions)
+{
+    // Check that only terminal symbols are used
+    TORCH_CHECK((0 <= expressions).all().item<bool>(),
+                "All symbols in the expressions must be non-negative integers.");
+    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
+                "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
+
+    int64_t B = expressions.size(0);
+    int64_t M = expressions.size(1);
+
+    if (M > HARD_MAX_LENGTH)
+    {
+        throw std::invalid_argument("M must be less than or equal to HARD_MAX_LENGTH, but got " + std::to_string(M) + " > " + std::to_string(HARD_MAX_LENGTH) + ".");
+    }
+
+    auto ops = torch::full({B, M}, NO_OP, expressions.options());
+    auto parents = torch::full({B, M}, NULL_CHILD, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    int64_t lparenthesis_id = get_token_id("(");
+    int64_t rparenthesis_id = get_token_id(")");
+
+    if (device.is_cuda())
+    {
+        parse_to_postfix_parent_cuda_impl(
+            this->precedence.packed_accessor32<int64_t, 1>(),
+            expressions.packed_accessor32<int64_t, 2>(),
+            ops.packed_accessor32<int64_t, 2>(),
+            parents.packed_accessor32<int64_t, 2>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            lparenthesis_id,
+            rparenthesis_id,
+            B,
+            M);
+    }
+    else
+    {
+        parse_to_postfix_parent_cpu_impl(
+            this->precedence.accessor<int64_t, 1>(),
+            expressions.accessor<int64_t, 2>(),
+            ops.accessor<int64_t, 2>(),
+            parents.accessor<int64_t, 2>(),
+            errors.accessor<int64_t, 1>(),
+            lparenthesis_id,
+            rparenthesis_id,
+            B,
+            M);
+    }
+
+    process_parsing_errors(errors, "prefix");
+
+    return std::make_tuple(ops, parents);
+}
+
 // Export using PyBind11
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -718,8 +828,10 @@ void init_pcfg(pybind11::module &m)
         .def("sample", &ProbabilisticContextFreeGrammar::sample, "Sample from the PCFG")
         .def("sample_string_expression", &ProbabilisticContextFreeGrammar::sample_string_expression, "Sample a string expression from the PCFG")
         .def("to_string", &ProbabilisticContextFreeGrammar::to_string, "Convert a tensor of expressions to a list of strings")
-        .def("parse_to_postfix", &ProbabilisticContextFreeGrammar::parse_to_postfix, "Parse a string expression to a postfix representation")
-        .def("parse_to_prefix", &ProbabilisticContextFreeGrammar::parse_to_prefix, "Parse a string expression to a prefix representation")
+        .def("parse_to_postfix", &ProbabilisticContextFreeGrammar::parse_to_postfix, "Parse a string expression to a postfix representation with child pointers")
+        .def("parse_to_postfix_parent", &ProbabilisticContextFreeGrammar::parse_to_postfix_parent, "Parse a string expression to a postfix representation with parent pointers")
+        .def("parse_to_prefix", &ProbabilisticContextFreeGrammar::parse_to_prefix, "Parse a string expression to a prefix representation with child pointers")
+        .def("parse_to_prefix_parent", &ProbabilisticContextFreeGrammar::parse_to_prefix_parent, "Parse a string expression to a prefix representation with parent pointers")
         .def_readonly("device", &ProbabilisticContextFreeGrammar::device)
         .def("get_symbol_id", &ProbabilisticContextFreeGrammar::get_symbol_id, "Get the ID of a symbol",
              pybind11::arg("symbol"));

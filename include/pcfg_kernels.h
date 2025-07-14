@@ -4,6 +4,7 @@
 constexpr int64_t HARD_MAX_LENGTH = 128;
 
 constexpr int64_t INVALID_RULE = -2;
+constexpr int64_t NULL_PARENT = -1;
 
 void pcfg_sample_string_expression_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> rule_lhs,
@@ -55,6 +56,27 @@ void parse_to_prefix_cuda_impl(
     int64_t B,
     int64_t M);
 
+void parse_to_prefix_parent_cpu_impl(
+    const torch::TensorAccessor<int64_t, 1> precedence_acc,
+    const torch::TensorAccessor<int64_t, 2> expressions_acc,
+    torch::TensorAccessor<int64_t, 2> ops_acc,
+    torch::TensorAccessor<int64_t, 2> parents_acc,
+    torch::TensorAccessor<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B, int64_t M);
+
+void parse_to_prefix_parent_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 1> precedence,
+    const torch::PackedTensorAccessor32<int64_t, 2> expressions,
+    torch::PackedTensorAccessor32<int64_t, 2> ops,
+    torch::PackedTensorAccessor32<int64_t, 2> parents,
+    torch::PackedTensorAccessor32<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B,
+    int64_t M);
+
 void parse_to_postfix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> precedence,
     const torch::TensorAccessor<int64_t, 2> expressions,
@@ -71,6 +93,27 @@ void parse_to_postfix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 2> expressions,
     torch::PackedTensorAccessor32<int64_t, 2> ops,
     torch::PackedTensorAccessor32<int64_t, 3> children,
+    torch::PackedTensorAccessor32<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B,
+    int64_t M);
+
+void parse_to_postfix_parent_cpu_impl(
+    const torch::TensorAccessor<int64_t, 1> precedence_acc,
+    const torch::TensorAccessor<int64_t, 2> expressions_acc,
+    torch::TensorAccessor<int64_t, 2> ops_acc,
+    torch::TensorAccessor<int64_t, 2> parents_acc,
+    torch::TensorAccessor<int64_t, 1> errors,
+    int64_t lparenthesis_id,
+    int64_t rparenthesis_id,
+    int64_t B, int64_t M);
+
+void parse_to_postfix_parent_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 1> precedence,
+    const torch::PackedTensorAccessor32<int64_t, 2> expressions,
+    torch::PackedTensorAccessor32<int64_t, 2> ops,
+    torch::PackedTensorAccessor32<int64_t, 2> parents,
     torch::PackedTensorAccessor32<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,

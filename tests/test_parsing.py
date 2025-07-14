@@ -1,10 +1,12 @@
 import torch
 import pytest
 from symbolic_torch import ProbabilisticContextFreeGrammar, Operator
+import time
 
 # NOTE: All tests should be parameterized with device=["cpu", "cuda"] to ensure both backends are tested.
 
 NULL_CHILD = -1
+NULL_PARENT = -1
 
 test_grammar = """E -> E + F [0.2]
 E -> E - F [0.2]
@@ -511,3 +513,212 @@ def test_benchmark_parsing_cpu_vs_cuda():
     print(f"CUDA parsing time: {cuda_time:.4f}s")
 
     # NOTE: for lower values CPU is a bit faster, but for larger batches CUDA becomes significantly faster.
+    
+# ===============================================
+# Tests for parent-pointer parsing functions
+# ===============================================
+
+def test_parse_to_postfix_parent_constant(pcfg: ProbabilisticContextFreeGrammar):
+    expression = torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_postfix_parent(expression)
+    
+    assert torch.equal(ops[:, :1], expression)
+    assert torch.equal(parents[:, 0], torch.tensor([NULL_PARENT], dtype=torch.int64, device=pcfg.device))
+
+
+def test_parse_to_prefix_parent_constant(pcfg: ProbabilisticContextFreeGrammar):
+    expression = torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_prefix_parent(expression)
+    
+    assert torch.equal(ops[:, :1], expression)
+    assert torch.equal(parents[:, 0], torch.tensor([NULL_PARENT], dtype=torch.int64, device=pcfg.device))
+
+
+@pytest.mark.parametrize("op_id", [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQRT), int(Operator.SQUARE)])
+def test_parse_to_postfix_parent_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+    LPAREN = pcfg.get_symbol_id('(')
+    RPAREN = pcfg.get_symbol_id(')')
+    expression = torch.tensor([[op_id, LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_postfix_parent(expression)
+
+    expected_ops = torch.tensor([[int(Operator.CONST_1), op_id]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[1, NULL_PARENT]], dtype=torch.int64, device=pcfg.device)
+
+    assert torch.equal(ops[:, :2], expected_ops)
+    assert torch.equal(parents[:, :2], expected_parents)
+
+
+@pytest.mark.parametrize("op_id", [Operator.SIN, Operator.COS, Operator.EXP, Operator.LOG, Operator.SQRT, Operator.SQUARE])
+def test_parse_to_prefix_parent_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+    LPAREN = pcfg.get_symbol_id('(')
+    RPAREN = pcfg.get_symbol_id(')')
+    expression = torch.tensor([[op_id, LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_prefix_parent(expression)
+
+    expected_ops = torch.tensor([[op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[NULL_PARENT, 0]], dtype=torch.int64, device=pcfg.device)
+
+    assert torch.equal(ops[:, :2], expected_ops)
+    assert torch.equal(parents[:, :2], expected_parents)
+
+
+@pytest.mark.parametrize("op_id", [Operator.ADD, Operator.SUB, Operator.MUL, Operator.DIV, Operator.POW])
+def test_parse_to_postfix_parent_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+    expression = torch.tensor([[int(Operator.CONST_1), op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_postfix_parent(expression)
+
+    expected_ops = torch.tensor([[int(Operator.CONST_1), int(Operator.CONST_1), op_id]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[2, 2, NULL_PARENT]], dtype=torch.int64, device=pcfg.device)
+
+    assert torch.equal(ops[:, :3], expected_ops)
+    assert torch.equal(parents[:, :3], expected_parents)
+
+
+@pytest.mark.parametrize("op_id", [Operator.ADD, Operator.SUB, Operator.MUL, Operator.DIV, Operator.POW])
+def test_parse_to_prefix_parent_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+    expression = torch.tensor([[int(Operator.CONST_1), op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_prefix_parent(expression)
+
+    expected_ops = torch.tensor([[op_id, int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[NULL_PARENT, 0, 0]], dtype=torch.int64, device=pcfg.device)
+
+    assert torch.equal(ops[:, :3], expected_ops)
+    assert torch.equal(parents[:, :3], expected_parents)
+
+
+def test_parse_to_postfix_parent_all_operators(pcfg: ProbabilisticContextFreeGrammar):
+    LPAREN = pcfg.get_symbol_id('(')
+    RPAREN = pcfg.get_symbol_id(')')
+    # (sin(X_0) + 1) * (log(X_0) - 1)
+    X_0 = int(Operator.VAR_START_ID)
+    expression = torch.tensor([[
+        LPAREN, int(Operator.SIN), LPAREN, X_0, RPAREN, int(Operator.ADD), int(Operator.CONST_1), RPAREN,
+        int(Operator.MUL),
+        LPAREN, int(Operator.LOG), LPAREN, X_0, RPAREN, int(Operator.SUB), int(Operator.CONST_1), RPAREN
+    ]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_postfix_parent(expression)
+
+    # Postfix ops: [X_0, sin, 1, +, X_0, log, 1, -, *]
+    expected_ops = torch.tensor([[X_0, int(Operator.SIN), int(Operator.CONST_1), int(Operator.ADD), X_0, int(Operator.LOG), int(Operator.CONST_1), int(Operator.SUB), int(Operator.MUL)]], dtype=torch.int64, device=pcfg.device)
+    # Postfix parents: [1, 3, 3, 8, 5, 7, 7, 8, NP]
+    expected_parents = torch.tensor([[1, 3, 3, 8, 5, 7, 7, 8, NULL_PARENT]], dtype=torch.int64, device=pcfg.device)
+
+    assert torch.equal(ops[:, :9], expected_ops)
+    assert torch.equal(parents[:, :9], expected_parents)
+
+
+def test_parse_to_prefix_parent_all_operators(pcfg: ProbabilisticContextFreeGrammar):
+    LPAREN = pcfg.get_symbol_id('(')
+    RPAREN = pcfg.get_symbol_id(')')
+    # (sin(X_0) + 1) * (log(X_0) - 1)
+    X_0 = int(Operator.VAR_START_ID)
+    expression = torch.tensor([[LPAREN, int(Operator.SIN), LPAREN, X_0, RPAREN, int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), LPAREN, int(Operator.LOG), LPAREN, X_0, RPAREN, int(Operator.SUB), int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
+    ops, parents = pcfg.parse_to_prefix_parent(expression)
+
+    # Prefix ops: [*, +, sin, X_0, 1, -, log, X_0, 1]
+    expected_ops = torch.tensor([[int(Operator.MUL), int(Operator.ADD), int(Operator.SIN), X_0, int(Operator.CONST_1), int(Operator.SUB), int(Operator.LOG), X_0, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
+    # Prefix parents: [NP, 0, 1, 2, 1, 0, 5, 6, 5]
+    expected_parents = torch.tensor([[NULL_PARENT, 0, 1, 2, 1, 0, 5, 6, 5]], dtype=torch.int64, device=pcfg.device)
+
+    assert torch.equal(ops[:, :9], expected_ops)
+    assert torch.equal(parents[:, :9], expected_parents)
+
+
+def test_parse_to_postfix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
+    LPAREN = pcfg.get_symbol_id('(')
+    RPAREN = pcfg.get_symbol_id(')')
+
+    expressions_list = [
+        torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64),
+        torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64),
+        torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64),
+        torch.tensor([[LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64),
+    ]
+    max_len = max(e.shape[1] for e in expressions_list)
+    expressions = torch.full((len(expressions_list), max_len), int(Operator.NO_OP), dtype=torch.int64, device=pcfg.device)
+    for i, e in enumerate(expressions_list):
+        expressions[i, :e.shape[1]] = e
+
+    batch_ops, batch_parents = pcfg.parse_to_postfix_parent(expressions)
+
+    for i, expr in enumerate(expressions_list):
+        single_ops, single_parents = pcfg.parse_to_postfix_parent(expr.to(pcfg.device))
+        len_single_ops = single_ops.shape[1]
+        # Check that the output is correct
+        assert torch.equal(batch_ops[i, :len_single_ops], single_ops[0])
+        assert torch.equal(batch_parents[i, :len_single_ops], single_parents[0])
+        # Check padding
+        assert torch.all(batch_ops[i, len_single_ops:] == int(Operator.NO_OP))
+        assert torch.all(batch_parents[i, len_single_ops:] == int(Operator.NO_OP))
+
+
+def test_parse_to_prefix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
+    LPAREN = pcfg.get_symbol_id('(')
+    RPAREN = pcfg.get_symbol_id(')')
+    expressions_list = [
+        torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64),
+        torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64),
+        torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64),
+        torch.tensor([[LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64),
+    ]
+    max_len = max(e.shape[1] for e in expressions_list)
+    expressions = torch.full((len(expressions_list), max_len), int(Operator.NO_OP), dtype=torch.int64, device=pcfg.device)
+    for i, e in enumerate(expressions_list):
+        expressions[i, :e.shape[1]] = e
+
+    batch_ops, batch_parents = pcfg.parse_to_prefix_parent(expressions)
+
+    for i, expr in enumerate(expressions_list):
+        single_ops, single_parents = pcfg.parse_to_prefix_parent(expr.to(pcfg.device))
+        len_single_ops = single_ops.shape[1]
+        # Check that the output is correct
+        assert torch.equal(batch_ops[i, :len_single_ops], single_ops[0])
+        assert torch.equal(batch_parents[i, :len_single_ops], single_parents[0])
+        # Check padding
+        assert torch.all(batch_ops[i, len_single_ops:] == int(Operator.NO_OP))
+        assert torch.all(batch_parents[i, len_single_ops:] == int(Operator.NO_OP))
+
+
+def test_benchmark_parsing_parent_cpu_vs_cuda():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+    N_BENCH_LOOPS = 10
+    
+    pcfg_cpu = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device("cpu"))
+    pcfg_cuda = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device("cuda"))
+    LPAREN = pcfg_cpu.get_symbol_id('(')
+    RPAREN = pcfg_cpu.get_symbol_id(')')
+    
+    expressions_list = [
+        torch.tensor([[LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), int(Operator.CONST_1)]]),
+        torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.COS), LPAREN, int(Operator.CONST_1), RPAREN, RPAREN, int(Operator.ADD), int(Operator.LOG), LPAREN, int(Operator.CONST_1), RPAREN]]),
+    ] * 1000000
+
+    max_len = max(e.shape[1] for e in expressions_list)
+    expressions = torch.full((len(expressions_list), max_len), int(Operator.NO_OP), dtype=torch.int64)
+    for i, e in enumerate(expressions_list):
+        expressions[i, :e.shape[1]] = e
+
+    expressions_cpu = expressions.to("cpu")
+    expressions_cuda = expressions.to("cuda")
+
+    # Warmup
+    pcfg_cpu.parse_to_postfix_parent(expressions_cpu)
+    pcfg_cuda.parse_to_postfix_parent(expressions_cuda)
+    torch.cuda.synchronize()
+
+    # CPU benchmark
+    start_time = time.time()
+    for _ in range(N_BENCH_LOOPS):
+        pcfg_cpu.parse_to_postfix_parent(expressions_cpu)
+    cpu_time = (time.time() - start_time) / N_BENCH_LOOPS
+    print(f"\nCPU parent parsing time: {cpu_time:.4f}s")
+
+    # CUDA benchmark
+    start_time = time.time()
+    for _ in range(N_BENCH_LOOPS):
+        pcfg_cuda.parse_to_postfix_parent(expressions_cuda)
+    torch.cuda.synchronize()
+    cuda_time = (time.time() - start_time) / N_BENCH_LOOPS
+    print(f"CUDA parent parsing time: {cuda_time:.4f}s")

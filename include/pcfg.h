@@ -39,7 +39,9 @@ public:
     torch::Tensor sample_string_expression(int64_t B);
     std::vector<std::string> to_string(torch::Tensor expressions);
     std::tuple<torch::Tensor, torch::Tensor> parse_to_prefix(torch::Tensor expressions);
+    std::tuple<torch::Tensor, torch::Tensor> parse_to_prefix_parent(torch::Tensor expressions);
     std::tuple<torch::Tensor, torch::Tensor> parse_to_postfix(torch::Tensor expressions);
+    std::tuple<torch::Tensor, torch::Tensor> parse_to_postfix_parent(torch::Tensor expressions);
 
     torch::Device device;
 
