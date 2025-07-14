@@ -242,5 +242,4 @@ def test_python_vs_cpp_cuda_probabilities():
         # Check CUDA vs Python
         assert abs(py_prob - cuda_prob) / max(py_prob, cuda_prob) < 0.2, f"Probability mismatch for {expr}: {py_prob:.5f} vs {cuda_prob:.5f}"
 
-        # print
-        print(f"Expression: {expr}, Python: {py_prob:.5f}, C++: {cpp_prob:.5f}, CUDA: {cuda_prob:.5f}")
+        print(f"Probabilities of expression {expr}, Python: {py_prob:.5f}, C++: {cpp_prob:.5f}, CUDA: {cuda_prob:.5f}")

@@ -44,6 +44,8 @@ void ProbabilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int6
 {
     symbol_to_id = std::unordered_map<std::string, int64_t>();
     id_to_symbol = std::unordered_map<int64_t, std::string>();
+
+    add_symbol("NO_OP", NO_OP); // TODO: this might cause some errors, run the tests
     add_symbol("C", LEARNABLE_CONSTANT);
 
     add_symbol("1", CONST_1);
@@ -809,6 +811,75 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
     return std::make_tuple(ops, parents);
 }
 
+torch::Tensor ProbabilisticContextFreeGrammar::postfix_to_infix(torch::Tensor expressions, int64_t max_infix_len)
+{
+    int64_t B = expressions.size(0);
+    int64_t M_postfix = expressions.size(1);
+
+    auto infix_out = torch::full({B, max_infix_len}, NO_OP, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    int64_t lparen_id = get_symbol_id("(");
+    int64_t rparen_id = get_symbol_id(")");
+
+    if (device.is_cuda())
+    {
+        postfix_to_infix_cuda_impl(
+            expressions.packed_accessor32<int64_t, 2>(),
+            infix_out.packed_accessor32<int64_t, 2>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            lparen_id, rparen_id,
+            B, M_postfix, max_infix_len);
+    }
+    else
+    {
+        postfix_to_infix_cpu_impl(
+            expressions.accessor<int64_t, 2>(),
+            infix_out.accessor<int64_t, 2>(),
+            errors.accessor<int64_t, 1>(),
+            this->id_to_symbol, // Not needed for tensor conversion
+            lparen_id, rparen_id,
+            B, M_postfix, max_infix_len);
+    }
+
+    process_parsing_errors(errors, "postfix to infix");
+    return infix_out;
+}
+
+torch::Tensor ProbabilisticContextFreeGrammar::prefix_to_infix(torch::Tensor expressions, int64_t max_infix_len)
+{
+    int64_t B = expressions.size(0);
+    int64_t M_prefix = expressions.size(1);
+
+    auto infix_out = torch::full({B, max_infix_len}, NO_OP, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    int64_t lparen_id = get_symbol_id("(");
+    int64_t rparen_id = get_symbol_id(")");
+
+    if (device.is_cuda())
+    {
+        prefix_to_infix_cuda_impl(
+            expressions.packed_accessor32<int64_t, 2>(),
+            infix_out.packed_accessor32<int64_t, 2>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            lparen_id, rparen_id,
+            B, M_prefix, max_infix_len);
+    }
+    else
+    {
+        prefix_to_infix_cpu_impl(
+            expressions.accessor<int64_t, 2>(),
+            infix_out.accessor<int64_t, 2>(),
+            errors.accessor<int64_t, 1>(),
+            lparen_id, rparen_id,
+            B, M_prefix, max_infix_len);
+    }
+
+    process_parsing_errors(errors, "prefix to infix");
+    return infix_out;
+}
+
 // Export using PyBind11
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -831,7 +902,11 @@ void init_pcfg(pybind11::module &m)
         .def("parse_to_postfix", &ProbabilisticContextFreeGrammar::parse_to_postfix, "Parse a string expression to a postfix representation with child pointers")
         .def("parse_to_postfix_parent", &ProbabilisticContextFreeGrammar::parse_to_postfix_parent, "Parse a string expression to a postfix representation with parent pointers")
         .def("parse_to_prefix", &ProbabilisticContextFreeGrammar::parse_to_prefix, "Parse a string expression to a prefix representation with child pointers")
+
         .def("parse_to_prefix_parent", &ProbabilisticContextFreeGrammar::parse_to_prefix_parent, "Parse a string expression to a prefix representation with parent pointers")
+        .def("postfix_to_infix", &ProbabilisticContextFreeGrammar::postfix_to_infix, "Convert a batch of postfix expressions to infix tensors.")
+        .def("prefix_to_infix", &ProbabilisticContextFreeGrammar::prefix_to_infix, "Convert a batch of prefix expressions to infix tensors.")
+
         .def_readonly("device", &ProbabilisticContextFreeGrammar::device)
         .def("get_symbol_id", &ProbabilisticContextFreeGrammar::get_symbol_id, "Get the ID of a symbol",
              pybind11::arg("symbol"));

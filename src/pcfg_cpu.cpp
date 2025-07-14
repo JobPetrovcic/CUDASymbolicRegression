@@ -787,3 +787,204 @@ void parse_to_postfix_parent_cpu_impl(
         }
     }
 }
+
+void postfix_to_infix_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> postfix_acc,
+    torch::TensorAccessor<int64_t, 2> infix_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    const std::unordered_map<int64_t, std::string> &id_to_symbol,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_postfix, int64_t M_infix)
+{
+#pragma omp parallel for
+    for (int b = 0; b < B; ++b)
+    {
+        std::stack<std::vector<int64_t>> s;
+        errors_acc[b] = 0;
+
+        for (int j = 0; j < M_postfix; ++j)
+        {
+            int64_t token_id = postfix_acc[b][j];
+            if (token_id == NO_OP)
+                break;
+
+            int arity = get_arity(token_id);
+            if (arity == 0)
+            { // Operand
+                s.push({token_id});
+            }
+            else if (arity == 1)
+            { // Unary operator
+                if (s.empty())
+                {
+                    errors_acc[b] = 5;
+                    break;
+                }
+                auto operand = s.top();
+                s.pop();
+
+                std::vector<int64_t> new_expr;
+                if (is_functional_style(token_id))
+                {
+                    new_expr.push_back(token_id);
+                    new_expr.push_back(lparen_id);
+                    new_expr.insert(new_expr.end(), operand.begin(), operand.end());
+                    new_expr.push_back(rparen_id);
+                }
+                else
+                { // e.g. SQUARE is postfix style
+                    new_expr.push_back(lparen_id);
+                    new_expr.insert(new_expr.end(), operand.begin(), operand.end());
+                    new_expr.push_back(rparen_id);
+                    new_expr.push_back(token_id);
+                }
+                s.push(new_expr);
+            }
+            else if (arity == 2)
+            { // Binary operator
+                if (s.size() < 2)
+                {
+                    errors_acc[b] = 6;
+                    break;
+                }
+                auto op2 = s.top();
+                s.pop();
+                auto op1 = s.top();
+                s.pop();
+
+                std::vector<int64_t> new_expr;
+                new_expr.push_back(lparen_id);
+                new_expr.insert(new_expr.end(), op1.begin(), op1.end());
+                new_expr.push_back(token_id);
+                new_expr.insert(new_expr.end(), op2.begin(), op2.end());
+                new_expr.push_back(rparen_id);
+                s.push(new_expr);
+            }
+        }
+
+        if (errors_acc[b] == 0)
+        {
+            if (s.size() != 1)
+            {
+                errors_acc[b] = 8; // Malformed expression
+            }
+            else
+            {
+                auto final_expr = s.top();
+                if (final_expr.size() > M_infix)
+                {
+                    errors_acc[b] = 1; // Infix expression too long
+                }
+                else
+                {
+                    for (size_t k = 0; k < final_expr.size(); ++k)
+                    {
+                        infix_acc[b][k] = final_expr[k];
+                    }
+                }
+            }
+        }
+    }
+}
+
+void prefix_to_infix_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> prefix_acc,
+    torch::TensorAccessor<int64_t, 2> infix_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_prefix, int64_t M_infix)
+{
+#pragma omp parallel for
+    for (int b = 0; b < B; ++b)
+    {
+        std::stack<std::vector<int64_t>> s;
+        errors_acc[b] = 0;
+
+        int64_t len = 0;
+        while (len < M_prefix && prefix_acc[b][len] != NO_OP)
+        {
+            len++;
+        }
+
+        for (int j = len - 1; j >= 0; --j)
+        {
+            int64_t token_id = prefix_acc[b][j];
+
+            int arity = get_arity(token_id);
+            if (arity == 0)
+            { // Operand
+                s.push({token_id});
+            }
+            else if (arity == 1)
+            { // Unary operator
+                if (s.empty())
+                {
+                    errors_acc[b] = 5;
+                    break;
+                }
+                auto operand = s.top();
+                s.pop();
+
+                std::vector<int64_t> new_expr;
+                if (is_functional_style(token_id))
+                {
+                    new_expr.push_back(token_id);
+                    new_expr.push_back(lparen_id);
+                    new_expr.insert(new_expr.end(), operand.begin(), operand.end());
+                    new_expr.push_back(rparen_id);
+                }
+                else
+                { // Postfix style
+                    new_expr.push_back(lparen_id);
+                    new_expr.insert(new_expr.end(), operand.begin(), operand.end());
+                    new_expr.push_back(rparen_id);
+                    new_expr.push_back(token_id);
+                }
+                s.push(new_expr);
+            }
+            else if (arity == 2)
+            { // Binary operator
+                if (s.size() < 2)
+                {
+                    errors_acc[b] = 6;
+                    break;
+                }
+                auto op1 = s.top();
+                s.pop();
+                auto op2 = s.top();
+                s.pop();
+
+                std::vector<int64_t> new_expr;
+                new_expr.push_back(lparen_id);
+                new_expr.insert(new_expr.end(), op1.begin(), op1.end());
+                new_expr.push_back(token_id);
+                new_expr.insert(new_expr.end(), op2.begin(), op2.end());
+                new_expr.push_back(rparen_id);
+                s.push(new_expr);
+            }
+        }
+
+        if (errors_acc[b] == 0)
+        {
+            if (s.size() != 1)
+            {
+                errors_acc[b] = 8; // Malformed expression
+            }
+            else
+            {
+                auto final_expr = s.top();
+                if (final_expr.size() > M_infix)
+                {
+                    errors_acc[b] = 1; // Infix expression too long
+                }
+                else
+                {
+                    for (size_t k = 0; k < final_expr.size(); ++k)
+                    {
+                        infix_acc[b][k] = final_expr[k];
+                    }
+                }
+            }
+        }
+    }
+}

@@ -119,3 +119,32 @@ void parse_to_postfix_parent_cuda_impl(
     int64_t rparenthesis_id,
     int64_t B,
     int64_t M);
+
+void postfix_to_infix_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> postfix_acc,
+    torch::TensorAccessor<int64_t, 2> infix_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    const std::unordered_map<int64_t, std::string> &id_to_symbol,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_postfix, int64_t M_infix);
+
+void postfix_to_infix_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> infix_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_postfix, int64_t M_infix);
+
+void prefix_to_infix_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> prefix_acc,
+    torch::TensorAccessor<int64_t, 2> infix_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_prefix, int64_t M_infix);
+
+void prefix_to_infix_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> infix_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_prefix, int64_t M_infix);

@@ -90,7 +90,7 @@ __global__ void evaluation_forward_step_k_kernel(
     }
 
     scalar_t result = static_cast<scalar_t>(0.0);
-    // CORRECTED: Unified switch statement
+
     switch (op)
     {
     case NO_OP:

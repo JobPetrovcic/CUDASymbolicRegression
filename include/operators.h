@@ -66,6 +66,22 @@ C10_HOST_DEVICE inline bool is_unary(int op)
     return get_arity(op) == 1;
 }
 
+// Helper function to determine if an operator is functional style (e.g., sin(x))
+C10_HOST_DEVICE inline bool is_functional_style(int64_t op_id)
+{
+    switch (op_id)
+    {
+    case SIN:
+    case COS:
+    case EXP:
+    case LOG:
+    case SQRT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 C10_HOST_DEVICE inline bool is_binary(int op)
 {
     return get_arity(op) == 2;
