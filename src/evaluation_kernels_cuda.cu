@@ -53,8 +53,7 @@ __global__ void evaluation_forward_step_k_kernel(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<scalar_t, 2> x_acc,
-    torch::PackedTensorAccessor64<scalar_t, 1> c_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> c_acc,
     size_t n_x, size_t k)
 {
     size_t b_global = blockIdx.x * blockDim.x + threadIdx.x;
@@ -98,9 +97,7 @@ __global__ void evaluation_forward_step_k_kernel(
         break;
     case LEARNABLE_CONSTANT:
     {
-        int64_t c_idx = posC_acc[k][b_global];
-        if (c_idx != NULL_CHILD)
-            result = c_acc[c_idx];
+        result = c_acc[k][b_global];
         break;
     }
     case CONST_1:
@@ -172,12 +169,11 @@ __global__ void evaluation_forward_step_k_kernel(
 template <typename scalar_t>
 __global__ void evaluation_backward_step_k_kernel(
     torch::PackedTensorAccessor64<scalar_t, 3> grad_cache_acc,
-    torch::PackedTensorAccessor64<scalar_t, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> grad_c_acc,
     torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
     torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     size_t n_x, size_t k, int32_t *error_flag_ptr)
 {
     size_t b_global = blockIdx.x * blockDim.x + threadIdx.x;
@@ -219,11 +215,7 @@ __global__ void evaluation_backward_step_k_kernel(
     {
         if (g_in == static_cast<scalar_t>(0.0))
             return;
-        int64_t c_idx = posC_acc[k][b_global];
-        if (c_idx != NULL_CHILD)
-        {
-            gpuAtomicAdd(&grad_c_acc[c_idx], g_in);
-        }
+        gpuAtomicAdd(&grad_c_acc[k][b_global], g_in);
         break;
     }
     case SIN:
@@ -422,8 +414,7 @@ void evaluation_forward_step_k_cuda_impl(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<scalar_t, 2> x_acc,
-    torch::PackedTensorAccessor64<scalar_t, 1> c_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> c_acc,
     int64_t n_x, int64_t k)
 {
     const int64_t B = ops_acc.size(1);
@@ -433,19 +424,18 @@ void evaluation_forward_step_k_cuda_impl(
                    (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     evaluation_forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
-        cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
+        cache_acc, ops_acc, ch_acc, x_acc, c_acc, n_x, k);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 template <typename scalar_t>
 void evaluation_backward_step_k_cuda_impl(
     torch::PackedTensorAccessor64<scalar_t, 3> grad_cache_acc,
-    torch::PackedTensorAccessor64<scalar_t, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> grad_c_acc,
     torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
     torch::PackedTensorAccessor64<scalar_t, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr)
 {
     const int64_t B = ops_acc.size(1);
@@ -455,7 +445,7 @@ void evaluation_backward_step_k_cuda_impl(
                    (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     evaluation_backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
-        grad_cache_acc, grad_c_acc, grad_x_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
+        grad_cache_acc, grad_c_acc, grad_x_acc, cache_acc, ops_acc, ch_acc, n_x, k, error_flag_ptr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -481,8 +471,7 @@ template __global__ void evaluation_forward_step_k_kernel<float>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<float, 2> x_acc,
-    torch::PackedTensorAccessor64<float, 1> c_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    torch::PackedTensorAccessor64<float, 2> c_acc,
     size_t n_x, size_t k);
 
 template __global__ void evaluation_forward_step_k_kernel<double>(
@@ -490,28 +479,25 @@ template __global__ void evaluation_forward_step_k_kernel<double>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<double, 2> x_acc,
-    torch::PackedTensorAccessor64<double, 1> c_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    torch::PackedTensorAccessor64<double, 2> c_acc,
     size_t n_x, size_t k);
 
 template __global__ void evaluation_backward_step_k_kernel<float>(
     torch::PackedTensorAccessor64<float, 3> grad_cache_acc,
-    torch::PackedTensorAccessor64<float, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<float, 2> grad_c_acc,
     torch::PackedTensorAccessor64<float, 2> grad_x_acc,
     torch::PackedTensorAccessor64<float, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     size_t n_x, size_t k, int32_t *error_flag_ptr);
 
 template __global__ void evaluation_backward_step_k_kernel<double>(
     torch::PackedTensorAccessor64<double, 3> grad_cache_acc,
-    torch::PackedTensorAccessor64<double, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<double, 2> grad_c_acc,
     torch::PackedTensorAccessor64<double, 2> grad_x_acc,
     torch::PackedTensorAccessor64<double, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     size_t n_x, size_t k, int32_t *error_flag_ptr);
 
 // Explicit template instantiation for scalar types
@@ -520,18 +506,16 @@ template void evaluation_forward_step_k_cuda_impl<float>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<float, 2> x_acc,
-    torch::PackedTensorAccessor64<float, 1> c_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    torch::PackedTensorAccessor64<float, 2> c_acc,
     int64_t n_x, int64_t k);
 
 template void evaluation_backward_step_k_cuda_impl<float>(
     torch::PackedTensorAccessor64<float, 3> grad_cache_acc,
-    torch::PackedTensorAccessor64<float, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<float, 2> grad_c_acc,
     torch::PackedTensorAccessor64<float, 2> grad_x_acc,
     torch::PackedTensorAccessor64<float, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr);
 
 template void evaluation_forward_step_k_cuda_impl<double>(
@@ -539,16 +523,14 @@ template void evaluation_forward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     torch::PackedTensorAccessor64<double, 2> x_acc,
-    torch::PackedTensorAccessor64<double, 1> c_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
+    torch::PackedTensorAccessor64<double, 2> c_acc,
     int64_t n_x, int64_t k);
 
 template void evaluation_backward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<double, 3> grad_cache_acc,
-    torch::PackedTensorAccessor64<double, 1> grad_c_acc,
+    torch::PackedTensorAccessor64<double, 2> grad_c_acc,
     torch::PackedTensorAccessor64<double, 2> grad_x_acc,
     torch::PackedTensorAccessor64<double, 3> cache_acc,
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
-    torch::PackedTensorAccessor64<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr);

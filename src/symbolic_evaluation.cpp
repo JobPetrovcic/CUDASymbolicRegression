@@ -35,15 +35,14 @@ torch::Tensor SymbolicEvaluation::forward(
     torch::Tensor X,
     torch::Tensor Ops,
     torch::Tensor Ch,
-    torch::Tensor C,
-    torch::Tensor posC)
+    torch::Tensor C)
 {
     const auto device = X.device();
     // Ensure tensors are on the correct device
-    TORCH_INTERNAL_ASSERT(Ops.device() == device && Ch.device() == device && C.device() == device && posC.device() == device,
+    TORCH_INTERNAL_ASSERT(Ops.device() == device && Ch.device() == device && C.device() == device,
                           "All input tensors must be on the same device.");
     // Ensure tensors are contiguous
-    TORCH_INTERNAL_ASSERT(Ops.is_contiguous() && Ch.is_contiguous() && C.is_contiguous() && posC.is_contiguous(),
+    TORCH_INTERNAL_ASSERT(Ops.is_contiguous() && Ch.is_contiguous() && C.is_contiguous(),
                           "All input tensors must be contiguous.");
 
     // --- Get dimensions ---
@@ -62,11 +61,10 @@ torch::Tensor SymbolicEvaluation::forward(
             auto ops_acc = Ops.packed_accessor64<int64_t, 2>();
             auto ch_acc = Ch.packed_accessor64<int64_t, 3>();
             auto x_acc = X.packed_accessor64<scalar_t, 2>();
-            auto c_acc = C.packed_accessor64<scalar_t, 1>();
-            auto posC_acc = posC.packed_accessor64<int64_t, 2>();
+            auto c_acc = C.packed_accessor64<scalar_t, 2>();
             for (int64_t k = 0; k < M; ++k)
             {
-                evaluation_forward_step_k_cuda_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
+                evaluation_forward_step_k_cuda_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, n_x, k);
             }
         }
         else
@@ -75,15 +73,14 @@ torch::Tensor SymbolicEvaluation::forward(
             auto ops_acc = Ops.accessor<int64_t, 2>();
             auto ch_acc = Ch.accessor<int64_t, 3>();
             auto x_acc = X.accessor<scalar_t, 2>();
-            auto c_acc = C.accessor<scalar_t, 1>();
-            auto posC_acc = posC.accessor<int64_t, 2>();
+            auto c_acc = C.accessor<scalar_t, 2>();
             for (int64_t k = 0; k < M; ++k)
             {
-                evaluation_forward_step_k_cpu_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, posC_acc, n_x, k);
+                evaluation_forward_step_k_cpu_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, n_x, k);
             }
         } }));
 
-    ctx->save_for_backward({X, Ops, Ch, C, posC, cache});
+    ctx->save_for_backward({X, Ops, Ch, C, cache});
 
     return cache;
 }
@@ -97,13 +94,11 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
     auto Ops = saved[1];
     auto Ch = saved[2];
     auto C = saved[3];
-    auto posC = saved[4];
-    auto cache = saved[5];
+    auto cache = saved[4];
 
     const auto device = X.device();
     const int64_t M = Ops.size(0);
     const int64_t n_x = X.size(1);
-    const int64_t SC = C.size(0);
 
     auto grad_output = grad_outputs[0];
     TORCH_INTERNAL_ASSERT(cache.sizes() == grad_output.sizes(),
@@ -114,7 +109,7 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
     grad_cache.add_(grad_output);
 
     auto grad_X = torch::zeros_like(X);
-    auto grad_C = torch::zeros_like(C);
+    auto grad_C = torch::zeros_like(C); // Now C is (M,B), so grad_C will be too.
 
     // --- Allocate error flag on the same device ---
     auto options = torch::TensorOptions().dtype(torch::kInt32).device(device);
@@ -126,29 +121,27 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
         if (device.is_cuda())
         {
             auto grad_cache_acc = grad_cache.packed_accessor64<scalar_t, 3>();
-            auto grad_C_acc = grad_C.packed_accessor64<scalar_t, 1>();
+            auto grad_C_acc = grad_C.packed_accessor64<scalar_t, 2>();
             auto grad_X_acc = grad_X.packed_accessor64<scalar_t, 2>();
             auto cache_acc = cache.packed_accessor64<scalar_t, 3>();
             auto ops_acc = Ops.packed_accessor64<int64_t, 2>();
             auto ch_acc = Ch.packed_accessor64<int64_t, 3>();
-            auto posC_acc = posC.packed_accessor64<int64_t, 2>();
             for (int64_t k = M - 1; k >= 0; --k)
             {
-                evaluation_backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
+                evaluation_backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, n_x, k, error_flag_ptr);
             }
         }
         else
         {
             auto grad_cache_acc = grad_cache.accessor<scalar_t, 3>();
-            auto grad_C_acc = grad_C.accessor<scalar_t, 1>();
+            auto grad_C_acc = grad_C.accessor<scalar_t, 2>();
             auto grad_X_acc = grad_X.accessor<scalar_t, 2>();
             auto cache_acc = cache.accessor<scalar_t, 3>();
             auto ops_acc = Ops.accessor<int64_t, 2>();
             auto ch_acc = Ch.accessor<int64_t, 3>();
-            auto posC_acc = posC.accessor<int64_t, 2>();
             for (int64_t k = M - 1; k >= 0; --k)
             {
-                evaluation_backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, posC_acc, n_x, k, error_flag_ptr);
+                evaluation_backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, n_x, k, error_flag_ptr);
             }
         } }));
 
@@ -183,8 +176,7 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
     return {grad_X,
             torch::Tensor(),
             torch::Tensor(),
-            grad_C,
-            torch::Tensor()};
+            grad_C};
 }
 
 // Python-facing wrapper function
@@ -192,7 +184,7 @@ torch::Tensor evaluate_backend(
     torch::Tensor X,   // (N, n_x)
     torch::Tensor Ops, // (M, B)
     torch::Tensor Ch,  // (M, B, MAX_ARITY)
-    torch::Tensor C    // (SC)
+    torch::Tensor C    // (M, B)
 )
 {
     const auto device = X.device();
@@ -200,10 +192,13 @@ torch::Tensor evaluate_backend(
                 "All input tensors must be on the same device.");
 
     const int n_x = X.size(1);
+    const int64_t M = Ops.size(0);
     TORCH_CHECK(Ops.dim() == 2, "Ops must be a 2D tensor");
     TORCH_CHECK(Ch.dim() == 3, "Ch must be a 3D tensor");
+    TORCH_CHECK(C.dim() == 2, "C must be a 2D tensor");
     TORCH_CHECK(Ops.size(0) == Ch.size(0), "Ops and Ch must have the same max length (dim 0)");
     TORCH_CHECK(Ops.size(1) == Ch.size(1), "Ops and Ch must have the same batch size (dim 1)");
+    TORCH_CHECK(Ops.sizes() == C.sizes(), "Ops and C must have the same shape");
     TORCH_CHECK(Ch.size(2) == MAX_ARITY, "Ch must have MaxArity as its last dimension");
 
     // Check that X and C are floating and Ch and Ops are Long tensors
@@ -231,24 +226,7 @@ torch::Tensor evaluate_backend(
 
     validate_inputs(Ops, Ch, n_x);
 
-    int64_t SC = 0;
-
-    // --- Part 1: Constant Handling and posC Tensor Creation ---
-    // Scan Ops tensor to find learnable constants
-    auto const_indices = (Ops == LEARNABLE_CONSTANT).nonzero();
-    SC = const_indices.size(0);
-
-    TORCH_CHECK(C.dim() == 1, "C must be a 1D tensor");
-    TORCH_CHECK(C.size(0) == SC, "The size of C must match the number of learnable constants in Ops");
-
-    auto posC = torch::zeros_like(Ops, Ops.options().dtype(torch::kInt64));
-    if (SC > 0)
-    {
-        posC.index_put_({const_indices.select(1, 0), const_indices.select(1, 1)},
-                        torch::arange(SC, Ops.options().dtype(torch::kInt64)));
-    }
-
-    auto result = SymbolicEvaluation::apply(X, Ops, Ch, C, posC);
+    auto result = SymbolicEvaluation::apply(X, Ops, Ch, C);
 
     return result;
 }

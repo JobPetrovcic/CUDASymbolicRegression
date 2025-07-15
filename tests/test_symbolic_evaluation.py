@@ -30,7 +30,8 @@ def build_and_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_ten
     ops_tensor = ops_tensor.to(device)
     ch_tensor = ch_tensor.to(device)
     c_tensor = c_tensor.to(device)
-    
+
+    # NOTE: The tests in this file use M-first tensors, so we call backend directly.
     y = evaluate_backend(x_tensor, ops_tensor, ch_tensor, c_tensor)
     return y
 
@@ -68,11 +69,6 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
 
     cache_list: List[Tensor] = []
     
-    # Map learnable constant indices
-    posC: Tensor = -torch.ones_like(ops_tensor)
-    const_indices = (ops_tensor == int(Operator.LEARNABLE_CONSTANT)).nonzero(as_tuple=True)
-    posC[const_indices] = torch.arange(len(const_indices[0]), device=device)
-
     # WARNING: We do NOT add epsilon for stability here, as we want it to match the nan output of the C++ kernel.
     # WARNING: We also do not use abs() here as we want to match the behavior of the C++ kernel.
     for k in range(M):
@@ -101,9 +97,7 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
 
             res: Optional[Tensor] = None
             if op == int(Operator.LEARNABLE_CONSTANT):
-                c_idx = posC[k, b].item()
-                if c_idx != NULL_CHILD:
-                    res = c_tensor[int(c_idx)].expand(N)
+                res = c_tensor[k, b].expand(N)
             elif op == int(Operator.CONST_1):
                 res = torch.full((N,), 1.0, dtype=x_tensor.dtype, device=device)
             elif op == int(Operator.CONST_2):
@@ -159,7 +153,9 @@ def test_noop_nan(device : str) -> None:
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
     ops_tensor = torch.tensor([[int(Operator.NO_OP)]], dtype=torch.int64)
     ch_tensor = -torch.ones(1, 1, 2, dtype=torch.int64)
-    c_tensor = symbolic_torch.create_constants(ops_tensor)
+    # create_constants expects (B,M), test ops_tensor is (M,B)
+    c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+    c_tensor = c_tensor.permute(1,0)
     custom_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     assert torch.isnan(custom_res).all(), "Expected output to be NaN when using Operator.NO_OP"
 
@@ -200,7 +196,9 @@ def test_validate_inputs_arity(device : str) -> None:
         for i in range(arity):
             ch_tensor[arity, 0, i] = i
             
-        c_tensor = symbolic_torch.create_constants(ops_tensor)
+        # create_constants expects (B,M), test ops_tensor is (M,B)
+        c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+        c_tensor = c_tensor.permute(1,0)
         # This should not raise an error
         build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
 
@@ -232,7 +230,9 @@ def test_validate_inputs_arity(device : str) -> None:
             ch_tensor_unary_fail[2, 0, 0] = 0
             ch_tensor_unary_fail[2, 0, 1] = 1
             
-            c_tensor_unary_fail = symbolic_torch.create_constants(ops_tensor_unary_fail)
+            # create_constants expects (B,M), test ops_tensor is (M,B)
+            c_tensor_unary_fail = symbolic_torch.create_constants(ops_tensor_unary_fail.permute(1,0))
+            c_tensor_unary_fail = c_tensor_unary_fail.permute(1,0)
             with pytest.raises(RuntimeError, match="Input validation failed"):
                 build_and_run(x_tensor, ops_tensor_unary_fail, ch_tensor_unary_fail, c_tensor_unary_fail, device=device)
 
@@ -242,7 +242,9 @@ def test_validate_inputs_child_index_too_large(device : str) -> None:
     ch_tensor = -torch.ones(2, 1, 2, dtype=torch.int64)
     ch_tensor[1, 0, 0] = 0
     ch_tensor[1, 0, 1] = 2 # Invalid, should be < k=1
-    c_tensor = symbolic_torch.create_constants(ops_tensor)
+    # create_constants expects (B,M), test ops_tensor is (M,B)
+    c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+    c_tensor = c_tensor.permute(1,0)
     with pytest.raises(RuntimeError, match="Input validation failed"):
         build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
 
@@ -251,7 +253,9 @@ def test_validate_inputs_unary_op_no_children(device: str) -> None:
     for op in unary_ops:
         ops_tensor = torch.tensor([[op]], dtype=torch.int64)
         ch_tensor = -torch.ones(1, 1, 2, dtype=torch.int64)
-        c_tensor = symbolic_torch.create_constants(ops_tensor)
+        # create_constants expects (B,M), test ops_tensor is (M,B)
+        c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+        c_tensor = c_tensor.permute(1,0)
         with pytest.raises(RuntimeError, match="Input validation failed"):
             build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
 
@@ -260,7 +264,9 @@ def test_validate_inputs_binary_op_no_children(device: str) -> None:
     for op in binary_ops:
         ops_tensor = torch.tensor([[op]], dtype=torch.int64)
         ch_tensor = -torch.ones(1, 1, 2, dtype=torch.int64)
-        c_tensor = symbolic_torch.create_constants(ops_tensor)
+        # create_constants expects (B,M), test ops_tensor is (M,B)
+        c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+        c_tensor = c_tensor.permute(1,0)
         with pytest.raises(RuntimeError, match="Input validation failed"):
             build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
 
@@ -269,7 +275,7 @@ def test_wrong_datatypes(device : str) -> None:
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
     ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)]], dtype=torch.int64)
     ch_tensor = -torch.ones(1, 1, 2, dtype=torch.int64)
-    c_tensor = torch.randn(0, dtype=torch.float32)
+    c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
 
     with pytest.raises(RuntimeError, match='X must be a floating-point tensor'):
         build_and_run(x_tensor.to(torch.int32), ops_tensor, ch_tensor, c_tensor, device=device)
@@ -295,7 +301,9 @@ def test_single_op(device : str, op : int) -> None:
         ch_tensor[arity, 0, i] = i
     ops_tensor[arity, 0] = op
 
-    c_tensor = symbolic_torch.create_constants(ops_tensor)
+    # create_constants expects (B,M), test ops_tensor is (M,B)
+    c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+    c_tensor = c_tensor.permute(1,0)
     custom_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     manual_res = manual_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     assert torch.allclose(custom_res, manual_res, atol=1e-6, equal_nan=True)
@@ -315,7 +323,9 @@ def test_batching(device : str) -> None:
     ch_tensor[2, 0, 1] = 1
     ch_tensor[2, 1, 0] = 0
 
-    c_tensor = symbolic_torch.create_constants(ops_tensor)
+    # create_constants expects (B,M), test ops_tensor is (M,B)
+    c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+    c_tensor = c_tensor.permute(1,0)
     custom_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     manual_res = manual_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     assert custom_res.shape == (3, 10, 2)
@@ -329,7 +339,9 @@ def test_cpu_gpu_match() -> None:
     ch_tensor = -torch.ones(3, 1, 2, dtype=torch.int64)
     ch_tensor[2, 0, 0] = 0
     ch_tensor[2, 0, 1] = 1
-    c_tensor = symbolic_torch.create_constants(ops_tensor)
+    # create_constants expects (B,M), test ops_tensor is (M,B)
+    c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+    c_tensor = c_tensor.permute(1,0)
     
     cpu_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device='cpu')
     gpu_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device='cuda')
@@ -359,7 +371,9 @@ def test_complex_expression(device : str) -> None:
     ch_tensor[4, 0, 0] = 2 # op + op
     ch_tensor[4, 0, 1] = 3
 
-    c_tensor = symbolic_torch.create_constants(ops_tensor)
+    # create_constants expects (B,M), test ops_tensor is (M,B)
+    c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+    c_tensor = c_tensor.permute(1,0)
     custom_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     manual_res = manual_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     assert torch.allclose(custom_res, manual_res, atol=1e-6, equal_nan=True)
@@ -378,7 +392,8 @@ def test_constants(device : str) -> None:
     ch_tensor = -torch.ones(3, 1, 2, dtype=torch.int64)
     ch_tensor[2, 0, 0] = 0
     ch_tensor[2, 0, 1] = 1
-    c_tensor = torch.tensor([3.14], dtype=torch.float32).to(device)
+    c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32).to(device)
+    c_tensor[0, 0] = 3.14
 
     custom_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     manual_res = manual_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
@@ -386,9 +401,9 @@ def test_constants(device : str) -> None:
     # The output shape is (M, N, B), which is (3, 4, 1) here.
     # We need to construct a tensor of the same shape to compare against.
     expected_res = torch.stack([
-        c_tensor.expand(4, 1),
+        torch.full((4, 1), 3.14, dtype=torch.float32, device=device),
         torch.ones(4, 1, device=device) * 1.0,
-        c_tensor.expand(4, 1) + 1.0
+        torch.full((4, 1), 3.14, dtype=torch.float32, device=device) + 1.0
     ], dim=0).view(3, 4, 1)
     assert torch.allclose(custom_res.to(device), expected_res.to(device), atol=1e-6)
 
@@ -396,14 +411,15 @@ def test_constants(device : str) -> None:
     ops_tensor = torch.tensor([[int(Operator.LEARNABLE_CONSTANT)], [int(Operator.SIN)]], dtype=torch.int64)
     ch_tensor = -torch.ones(2, 1, 2, dtype=torch.int64)
     ch_tensor[1, 0, 0] = 0
-    c_tensor = torch.tensor([3.14], dtype=torch.float32).to(device)
+    c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32).to(device)
+    c_tensor[0, 0] = 3.14
     
     custom_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     manual_res = manual_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
     assert torch.allclose(custom_res, manual_res, atol=1e-6)
     expected_res_sin = torch.stack([
-        c_tensor.expand(4, 1),
-        torch.sin(c_tensor).expand(4, 1)
+        torch.full((4, 1), 3.14, dtype=torch.float32, device=device),
+        torch.sin(torch.tensor(3.14, device=device)).expand(4, 1)
     ], dim=0).view(2, 4, 1)
     assert torch.allclose(custom_res.to(device), expected_res_sin.to(device), atol=1e-6)
 
@@ -415,7 +431,9 @@ def test_gradients(device: str, op: int) -> None:
     
     ops_tensor = torch.zeros(1 + arity, 1, dtype=torch.int64)
     ch_tensor = -torch.ones(1 + arity, 1, 2, dtype=torch.int64)
-    c_tensor = symbolic_torch.create_constants(ops_tensor).to(device)
+    # create_constants expects (B,M), test ops_tensor is (M,B)
+    c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
+    c_tensor = c_tensor.permute(1,0).to(device)
 
     for i in range(arity):
         ops_tensor[i, 0] = int(Operator.VAR_START_ID) + i
@@ -466,7 +484,9 @@ def test_benchmark() -> None:
     ch_tensor[7, :, 0] = 4
     ch_tensor[7, :, 1] = 6
 
-    c_tensor = torch.randn(B, dtype=torch.float32)
+    c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
+    const_mask = (ops_tensor == int(Operator.LEARNABLE_CONSTANT))
+    c_tensor[const_mask] = torch.randn(int(const_mask.sum()))
 
     # Manual PyTorch
     start_time = time.time()
@@ -492,7 +512,8 @@ def test_benchmark() -> None:
 def test_large_benchmark() -> None:
     B, N, n_x = 8192, 2048, 8
     x_tensor = torch.randn(N, n_x, dtype=torch.float32)
-    c_tensor = symbolic_torch.create_constants(torch.tensor([], dtype=torch.int64)).to(x_tensor.device)
+    # No constants in this expression, so C is all zeros
+    c_tensor = torch.zeros((20, B), dtype=torch.float32).to(x_tensor.device)
 
     # A more complex expression:
     # log( (sin(X0) + cos(X1)) * (exp(X2) - sqrt(X3)) ) + (X4 * X5) - (X6 / X7)
@@ -569,7 +590,7 @@ def test_large_benchmark() -> None:
 def test_gradient_on_invalid_op(op: int, device: str):
     B, N, n_x = 1, 1, 2
     x_tensor = torch.ones(N, n_x, dtype=torch.float32)
-    c_tensor = torch.ones((0, ), dtype=torch.float32)  # No constants needed for this test
+    
     grad_output = torch.ones(N, B, dtype=torch.float32)
 
     if op == int(Operator.LOG):
@@ -578,12 +599,14 @@ def test_gradient_on_invalid_op(op: int, device: str):
         ch_tensor = -torch.ones(2, B, 2, dtype=torch.int64)
         ch_tensor[1, :, 0] = 0
         x_tensor[0, 0] = 0
+        c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
     elif op == int(Operator.SQRT):
         # sqrt(-1)
         ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.SQRT)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(2, B, 2, dtype=torch.int64)
         ch_tensor[1, :, 0] = 0
         x_tensor[0, 0] = -1
+        c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
     elif op == int(Operator.DIV):
         # 1/0
         ops_tensor = torch.tensor([[int(Operator.CONST_1)], [int(Operator.VAR_START_ID)], [int(Operator.DIV)]], dtype=torch.int64).expand(-1, B)
@@ -591,19 +614,16 @@ def test_gradient_on_invalid_op(op: int, device: str):
         ch_tensor[2, :, 0] = 0
         ch_tensor[2, :, 1] = 1
         x_tensor[0, 0] = 0
+        c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
     elif op == int(Operator.NO_OP):
         ops_tensor = torch.tensor([[int(Operator.NO_OP)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(1, B, 2, dtype=torch.int64)
+        c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
     else:
         raise ValueError(f"Unsupported operator for gradient test: {op}")
     
-    with pytest.raises(RuntimeError) as excinfo:
-        build_and_run_with_grad(x_tensor, ops_tensor, ch_tensor, c_tensor, grad_output, null_nan_output_grad=False, device=device)
-
-    # Check if the error message contains one of the expected substrings
-    error_str = str(excinfo.value)
-    # TODO: Update this to match the actual error message from your C++ kernel
-    assert "Backward error: Gradient propagated to a" in error_str 
+    with pytest.raises(RuntimeError, match="Backward error: Gradient propagated to a"):
+        build_and_run_with_grad(x_tensor, ops_tensor, ch_tensor, c_tensor, grad_output, null_nan_output_grad=False, device=device, use_custom_kernel=True)
 
 
 if __name__ == "__main__":

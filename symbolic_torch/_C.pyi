@@ -31,7 +31,7 @@ def evaluate_backend(
     X: torch.Tensor, # (N, n_x)
     Ops: torch.Tensor, # (B, M)
     Ch: torch.Tensor, # (B, M, MAX_ARITY)
-    C: Optional[torch.Tensor] = None # (SC, ) where SC is the number of learnable constants used in Ops
+    C: torch.Tensor # (M, B)
 ) -> torch.Tensor:
     """
     Let M be the maximum number of operations in an expression, B the batch size of the expressions, N the number of datapoints, and n_x the number of variables in the expressions. 
@@ -40,8 +40,8 @@ def evaluate_backend(
 
     X: Input tensor for the variables of shape (M, N, B).
     Ops: Tensor of operations specified by integers (see Operator Enum) of shape (M, B) for the expressions in postfix order. If some operations are not used, they can be set to NO_OP.
-    Ch: Tensor of postfix order indices for the children of nodes in th expressions of shape (M, B). If the operation has less than MAX_ARITY = 2 children, the unused children must be set to -1.
-    C: tensor of learnable constants of shape (SC) where SC is the number of learnable constants used in Ops. 
+    Ch: Tensor of postfix order indices for the children of nodes in the expressions of shape (M, B, 2). If the operation has less than MAX_ARITY = 2 children, the unused children must be set to -1.
+    C: Tensor of learnable constants of shape (M, B). For any (m, b) where Ops[m,b] is not a LEARNABLE_CONSTANT, the value of C[m,b] is ignored.
     
     """
     ...
@@ -81,4 +81,3 @@ class ProbabilisticContextFreeGrammar:
         ...
     def get_symbol_id(self, symbol: str) -> int:
         ...
-        

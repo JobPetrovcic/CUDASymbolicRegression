@@ -56,8 +56,7 @@ void evaluation_forward_step_k_cpu_impl(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     torch::TensorAccessor<scalar_t, 2> x_acc,
-    torch::TensorAccessor<scalar_t, 1> c_acc,
-    torch::TensorAccessor<int64_t, 2> posC_acc,
+    torch::TensorAccessor<scalar_t, 2> c_acc,
     int64_t n_x, int64_t k)
 {
     const int64_t B = ops_acc.size(1);
@@ -98,8 +97,7 @@ void evaluation_forward_step_k_cpu_impl(
             {
             case LEARNABLE_CONSTANT:
             {
-                const int64_t c_idx = posC_acc[k][b]; // Maybe TODO: add a check
-                result = c_acc[c_idx];
+                result = c_acc[k][b];
                 break;
             }
             case CONST_1:
@@ -175,12 +173,11 @@ void evaluation_forward_step_k_cpu_impl(
 template <typename scalar_t>
 void evaluation_backward_step_k_cpu_impl(
     torch::TensorAccessor<scalar_t, 3> grad_cache_acc,
-    torch::TensorAccessor<scalar_t, 1> grad_c_acc,
+    torch::TensorAccessor<scalar_t, 2> grad_c_acc,
     torch::TensorAccessor<scalar_t, 2> grad_x_acc,
     torch::TensorAccessor<scalar_t, 3> cache_acc,
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
-    torch::TensorAccessor<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr)
 {
     const int64_t B = ops_acc.size(1);
@@ -214,12 +211,8 @@ void evaluation_backward_step_k_cpu_impl(
             {
                 if (g_in == static_cast<scalar_t>(0.0))
                     continue;
-                int64_t c_idx = posC_acc[k][b];
-                if (c_idx != NULL_CHILD)
-                {
 #pragma omp atomic
-                    grad_c_acc[c_idx] += g_in;
-                }
+                grad_c_acc[k][b] += g_in;
                 break;
             }
             case SIN:
@@ -428,18 +421,16 @@ template void evaluation_forward_step_k_cpu_impl<float>(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     torch::TensorAccessor<float, 2> x_acc,
-    torch::TensorAccessor<float, 1> c_acc,
-    torch::TensorAccessor<int64_t, 2> posC_acc,
+    torch::TensorAccessor<float, 2> c_acc,
     int64_t n_x, int64_t k);
 
 template void evaluation_backward_step_k_cpu_impl<float>(
     torch::TensorAccessor<float, 3> grad_cache_acc,
-    torch::TensorAccessor<float, 1> grad_c_acc,
+    torch::TensorAccessor<float, 2> grad_c_acc,
     torch::TensorAccessor<float, 2> grad_x_acc,
     torch::TensorAccessor<float, 3> cache_acc,
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
-    torch::TensorAccessor<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr);
 
 template void evaluation_forward_step_k_cpu_impl<double>(
@@ -447,16 +438,14 @@ template void evaluation_forward_step_k_cpu_impl<double>(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     torch::TensorAccessor<double, 2> x_acc,
-    torch::TensorAccessor<double, 1> c_acc,
-    torch::TensorAccessor<int64_t, 2> posC_acc,
+    torch::TensorAccessor<double, 2> c_acc,
     int64_t n_x, int64_t k);
 
 template void evaluation_backward_step_k_cpu_impl<double>(
     torch::TensorAccessor<double, 3> grad_cache_acc,
-    torch::TensorAccessor<double, 1> grad_c_acc,
+    torch::TensorAccessor<double, 2> grad_c_acc,
     torch::TensorAccessor<double, 2> grad_x_acc,
     torch::TensorAccessor<double, 3> cache_acc,
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
-    torch::TensorAccessor<int64_t, 2> posC_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr);

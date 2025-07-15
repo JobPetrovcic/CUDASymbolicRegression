@@ -38,9 +38,8 @@ def test_generated_evalvation(device : str):
     N = 100
     B = 10
     ops, ch = pcfg.sample(B)
-    c = create_constants(ops, device=torch.device(device))
+    c = create_constants(ops)
     X = torch.randn(N, n_variables, device=torch.device(device))
 
     evaluated = evaluate(X, ops, ch, c)
     assert evaluated.shape == (B, M, N)
-

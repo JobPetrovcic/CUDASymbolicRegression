@@ -16,8 +16,7 @@ public:
         torch::Tensor X,
         torch::Tensor Ops,
         torch::Tensor Ch,
-        torch::Tensor C,
-        torch::Tensor posC);
+        torch::Tensor C);
 
     static torch::autograd::variable_list backward(
         torch::autograd::AutogradContext *ctx,
@@ -25,8 +24,8 @@ public:
 };
 
 // Python-facing wrapper function
-std::tuple<torch::Tensor, torch::Tensor> evaluate_backend(
+torch::Tensor evaluate_backend(
     torch::Tensor X,
     torch::Tensor Ops,
     torch::Tensor Ch,
-    c10::optional<torch::Tensor> C_opt);
+    torch::Tensor C);
