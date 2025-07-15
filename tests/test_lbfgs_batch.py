@@ -22,12 +22,12 @@ class batchedRosenbrock(nn.Module):
     """Test function for optimization. Minimum is at (1, 1)."""
     def __init__(self, n_problems: int, device: str):
         super().__init__()
-        self.a = torch.ones(n_problems, 1, device=device)
-        self.b = torch.full((n_problems, 1), 100.0, device=device)
+        self.a = torch.ones(1, n_problems, device=device)
+        self.b = torch.full((1, n_problems), 100.0, device=device)
 
     def forward(self, x: Tensor) -> Tensor:
-        x1, x2 = x[:, 0], x[:, 1]
-        f = (self.a.squeeze() - x1)**2 + self.b.squeeze() * (x2 - x1**2)**2
+        x1, x2 = x[0, :], x[1, :]
+        f = (self.a.squeeze(0) - x1)**2 + self.b.squeeze(0) * (x2 - x1**2)**2
         return f
 
 
@@ -41,7 +41,7 @@ def test_correctness_rosenbrock(device : str, line_search_fn : Literal['strong_w
     """
     n_problems = 10
     model = batchedRosenbrock(n_problems, device=device)
-    x0 = torch.randn(n_problems, 2, requires_grad=True, device=device)
+    x0 = torch.randn(2, n_problems, requires_grad=True, device=device)
     
     optimizer = LBFGS_batch(
         [x0], 
@@ -86,7 +86,7 @@ def test_benchmark_large_batch(benchmark, device : str):
         pytest.skip("Skipping large benchmark on CPU to save time.")
 
     model = batchedRosenbrock(n_problems, device=device)
-    x0 = torch.randn(n_problems, 2, requires_grad=True, device=device)
+    x0 = torch.randn(2, n_problems, requires_grad=True, device=device)
 
     optimizer = LBFGS_batch(
         [x0], 
@@ -104,7 +104,7 @@ def test_benchmark_large_batch(benchmark, device : str):
 
     def target_func():
         # Reset parameters for each benchmark round to ensure fairness
-        x0.data.copy_(torch.randn(n_problems, 2, device=device))
+        x0.data.copy_(torch.randn(2, n_problems, device=device))
         optimizer.step(closure)
         # For GPU, wait for all kernels to finish
         if device == 'cuda':
