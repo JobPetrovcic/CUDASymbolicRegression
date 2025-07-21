@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Tuple
 from enum import Enum
 import torch
 
@@ -81,3 +81,6 @@ class ProbabilisticContextFreeGrammar:
         ...
     def get_symbol_id(self, symbol: str) -> int:
         ...
+
+def get_arity(op: Operator) -> int:
+    ...

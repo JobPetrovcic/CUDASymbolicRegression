@@ -65,7 +65,7 @@ def test_correctness_rosenbrock(device : str, line_search_fn : Literal['strong_w
     expected_solution = torch.ones_like(x0)
     
     # 1. The final loss should be very close to zero.
-    assert final_loss.mean() < 1e-5, f"Final loss was not close to zero for {line_search_fn}"
+    assert final_loss.mean() < 1e-5, f"Final loss was not close to zero for {line_search_fn}, got {final_loss.mean().item()}"
     
     # 2. The final parameters should be very close to the known minimum [1.0, 1.0].
     assert torch.allclose(x0, expected_solution, atol=1e-3), \

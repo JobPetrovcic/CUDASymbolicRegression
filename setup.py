@@ -35,6 +35,7 @@ setup(
                 'src/pcfg.cpp',
                 'src/pcfg_cpu.cpp',
                 'src/pcfg_cuda.cu',
+                'src/utils.cpp',
             ],
             include_dirs=[os.path.abspath('include')],
             extra_compile_args=extra_compile_args,

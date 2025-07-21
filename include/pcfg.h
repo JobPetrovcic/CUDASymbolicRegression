@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 #include <torch/torch.h>
+#include "operators.h"
 
 /*
 This file describes the data structures and algorithms for a batched PCFG expression generator in CUDA.
@@ -58,6 +59,16 @@ public:
             return it->second;
         }
         throw std::runtime_error("Symbol not found: " + symbol);
+    }
+    int64_t n_operators;
+    torch::Tensor get_arities() const
+    {
+        torch::Tensor arities = torch::zeros({this->n_operators}, torch::kInt64).to(device);
+        for (int64_t i = 0; i < this->n_operators; ++i)
+        {
+            arities[i] = get_arity(i);
+        }
+        return arities;
     }
 
 private:

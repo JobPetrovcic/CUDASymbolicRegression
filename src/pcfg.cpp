@@ -139,6 +139,8 @@ void ProbabilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int6
     this->precedence.index_put_({SQUARE}, 4);
     this->precedence.index_put_({SQRT}, 4);
 
+    this->n_operators = VAR_START_ID + n_variables;
+
     this->terminal_limit = VAR_START_ID + n_variables + 2;
 
     // Level 4: Parentheses
@@ -909,5 +911,7 @@ void init_pcfg(pybind11::module &m)
 
         .def_readonly("device", &ProbabilisticContextFreeGrammar::device)
         .def("get_symbol_id", &ProbabilisticContextFreeGrammar::get_symbol_id, "Get the ID of a symbol",
-             pybind11::arg("symbol"));
+             pybind11::arg("symbol"))
+        .def("n_operators", &ProbabilisticContextFreeGrammar::n_operators, "Get the number of operators in the grammar")
+        .def("get_arities", &ProbabilisticContextFreeGrammar::get_arities, "Get the arities of the operators in the grammar for all symbols in the pcfg");
 }
