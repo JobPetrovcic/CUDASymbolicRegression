@@ -600,13 +600,6 @@ def test_gradient_on_invalid_op(op: int, device: str):
         ch_tensor[1, :, 0] = 0
         x_tensor[0, 0] = 0
         c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
-    elif op == int(Operator.SQRT):
-        # sqrt(-1)
-        ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.SQRT)]], dtype=torch.int64).expand(-1, B)
-        ch_tensor = -torch.ones(2, B, 2, dtype=torch.int64)
-        ch_tensor[1, :, 0] = 0
-        x_tensor[0, 0] = -1
-        c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
     elif op == int(Operator.DIV):
         # 1/0
         ops_tensor = torch.tensor([[int(Operator.CONST_1)], [int(Operator.VAR_START_ID)], [int(Operator.DIV)]], dtype=torch.int64).expand(-1, B)

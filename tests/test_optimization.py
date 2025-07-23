@@ -175,18 +175,22 @@ def test_very_large_noisy_optimization(device_str: str):
     # --- Setup ---
     N, M, n_x = 100, 16, 4
 
-    # Target function: y = c1*sin(X0+c2) + c3*log(|X1*X2 + c4|^2 + 1e-6)
+    # Target function: y = c1*sin(X0+c2) + c3*log(|X1*X2 + c4|^2)
     # Using random true constants for each problem in the batch
     c1_true = torch.randn(B, 1, device=device)
     c2_true = torch.randn(B, 1, device=device)
     c3_true = torch.randn(B, 1, device=device)
-    c4_true = torch.randn(B, 1, device=device)
+    # Shift c4_true by a large amount to ensure the argument to log is always positive
+    # and far from zero, avoiding numerical instability without needing to clamp.
+    c4_true = torch.randn(B, 1, device=device) + 10.0
     
     X = torch.randn(N, n_x, device=device) * 2
 
-    # Calculate clean Y_true
+    # Calculate clean Y_true, matching the symbolic expression exactly.
+    # The symbolic model evaluates log(square(...)), not log(square(...) + eps).
+    term_for_log = torch.square(X[:, 1].unsqueeze(0) * X[:, 2].unsqueeze(0) + c4_true)
     Y_true = (c1_true * torch.sin(X[:, 0].unsqueeze(0) + c2_true) + 
-              c3_true * torch.log(torch.square(X[:, 1].unsqueeze(0) * X[:, 2].unsqueeze(0) + c4_true) + 1e-6))
+              c3_true * torch.log(term_for_log))
     
     # Add noise
     noise_level = 0.05 * torch.std(Y_true)
@@ -229,7 +233,8 @@ def test_very_large_noisy_optimization(device_str: str):
     start_time = time.time()
     _, Y_final = optimize(
         X, Y_noisy, Ops, Ch, C_init,
-        line_search_fn='strong_wolfe'
+        line_search_fn='strong_wolfe',
+        max_iter=300 # Increased iterations for this complex, noisy problem
     )
     if device.type == 'cuda':
         torch.cuda.synchronize()
@@ -240,7 +245,15 @@ def test_very_large_noisy_optimization(device_str: str):
     
     # --- Assertions ---
     # We want to check that we recovered the original signal, so we calculate loss against Y_true
-    initial_mse_vs_true = loss_fn_mse(evaluate(X, Ops, Ch, C_init).gather(1, torch.tensor(M-1, device=device).view(1,1,1).expand(B,1,N)).squeeze(1), Y_true)
+    with torch.no_grad():
+        is_op = Ops != int(Operator.NO_OP)
+        root_indices = is_op.sum(dim=1) - 1
+        root_indices[root_indices < 0] = 0
+        y_cache_init = evaluate(X, Ops, Ch, C_init)
+        indices = root_indices.view(B, 1, 1).expand(B, 1, N)
+        Y_init = y_cache_init.gather(1, indices).squeeze(1)
+        initial_mse_vs_true = loss_fn_mse(Y_init, Y_true)
+    
     final_mse_vs_true = loss_fn_mse(Y_final, Y_true)
     
     print(f"Initial MSE vs. True Signal: {initial_mse_vs_true.item():.6f}")

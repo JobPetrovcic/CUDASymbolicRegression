@@ -29,8 +29,8 @@ class Operator(Enum):
 # 2. Define the signature of the 'evaluate' function
 def evaluate_backend(
     X: torch.Tensor, # (N, n_x)
-    Ops: torch.Tensor, # (B, M)
-    Ch: torch.Tensor, # (B, M, MAX_ARITY)
+    Ops: torch.Tensor, # (M, B)
+    Ch: torch.Tensor, # (M, B, MAX_ARITY)
     C: torch.Tensor # (M, B)
 ) -> torch.Tensor:
     """

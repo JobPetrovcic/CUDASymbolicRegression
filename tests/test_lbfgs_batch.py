@@ -21,7 +21,7 @@ def device():
 class batchedRosenbrock(nn.Module):
     """Test function for optimization. Minimum is at (1, 1)."""
     def __init__(self, n_problems: int, device: str):
-        super().__init__()
+        super().__init__() # type: ignore
         self.a = torch.ones(1, n_problems, device=device)
         self.b = torch.full((1, n_problems), 100.0, device=device)
 

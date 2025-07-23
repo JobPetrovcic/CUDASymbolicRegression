@@ -132,9 +132,12 @@ print(f"\nBest-fitting expression was #{best_expr_idx.item()+1} with a final MSE
 print(f"Best expression found: {sampled_strings[best_expr_idx.item()]}")
 
 # The constants for the winning expression
-best_constants = C_final[best_expr_idx]
-found_consts = best_constants[best_constants != 0]
-print(f"Its fitted constants are: {found_consts.cpu().numpy()}")
+best_C = C_final[best_expr_idx]
+best_Ops = Ops[best_expr_idx]
+# Create a mask to find the locations of LEARNABLE_CONSTANT in the winning expression
+const_mask = (best_Ops == int(symbolic_torch.Operator.LEARNABLE_CONSTANT))
+found_consts = best_C[const_mask]
+print(f"Its fitted constants are: {found_consts.cpu().numpy().round(4)}")
 
 # We expect the best MSE to be very low, indicating one of the
 # expressions was a good fit for the target data.

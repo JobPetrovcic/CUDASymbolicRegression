@@ -740,7 +740,7 @@ std::vector<std::string> ProbabilisticContextFreeGrammar::to_string(torch::Tenso
         for (int64_t j = 0; j < M; ++j)
         {
             int64_t token_id = accessor[i][j];
-            if (token_id == 0) // NO_OP is padding TODO: use casting
+            if (token_id == NO_OP) // NO_OP is padding TODO: use casting
                 break;
             auto it = id_to_symbol.find(token_id);
             if (it != id_to_symbol.end())
@@ -808,7 +808,7 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
             M);
     }
 
-    process_parsing_errors(errors, "prefix");
+    process_parsing_errors(errors, "postfix");
 
     return std::make_tuple(ops, parents);
 }
@@ -912,6 +912,6 @@ void init_pcfg(pybind11::module &m)
         .def_readonly("device", &ProbabilisticContextFreeGrammar::device)
         .def("get_symbol_id", &ProbabilisticContextFreeGrammar::get_symbol_id, "Get the ID of a symbol",
              pybind11::arg("symbol"))
-        .def("n_operators", &ProbabilisticContextFreeGrammar::n_operators, "Get the number of operators in the grammar")
-        .def("get_arities", &ProbabilisticContextFreeGrammar::get_arities, "Get the arities of the operators in the grammar for all symbols in the pcfg");
+        .def_readonly("n_operators", &ProbabilisticContextFreeGrammar::n_operators, "Get the number of operators in the grammar")
+        .def("get_arities", &ProbabilisticContextFreeGrammar::get_arities, "Get the arities of the operators in the grammar");
 }
