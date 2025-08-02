@@ -180,6 +180,139 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
 }
 
 // Python-facing wrapper function
+torch::Tensor evaluate_multiple_constant_backend(
+    torch::Tensor X,   // (N, n_x)
+    torch::Tensor Ops, // (M, B)
+    torch::Tensor Ch,  // (M, B, MAX_ARITY)
+    torch::Tensor C    // (M, B, K)
+)
+{
+    const auto device = X.device();
+    TORCH_CHECK(Ops.device() == device && Ch.device() == device && C.device() == device,
+                "All input tensors must be on the same device.");
+
+    const int n_x = X.size(1);
+    TORCH_CHECK(Ops.dim() == 2, "Ops must be a 2D tensor");
+    TORCH_CHECK(Ch.dim() == 3, "Ch must be a 3D tensor");
+    TORCH_CHECK(C.dim() == 3, "C must be a 3D tensor for multiple constant evaluation");
+    TORCH_CHECK(Ops.size(0) == Ch.size(0) && Ops.size(0) == C.size(0), "Ops, Ch, and C must have the same max length (dim 0)");
+    TORCH_CHECK(Ops.size(1) == Ch.size(1) && Ops.size(1) == C.size(1), "Ops, Ch, and C must have the same batch size (dim 1)");
+    TORCH_CHECK(Ch.size(2) == MAX_ARITY, "Ch must have MaxArity as its last dimension");
+
+    // Check that X and C are floating and Ch and Ops are Long tensors
+    TORCH_CHECK(X.scalar_type() == torch::kFloat || X.scalar_type() == torch::kDouble, "X must be a floating-point tensor (float or double)");
+    TORCH_CHECK(C.scalar_type() == torch::kFloat || C.scalar_type() == torch::kDouble, "C must be a floating-point tensor (float or double)");
+    TORCH_CHECK(Ops.scalar_type() == torch::kInt64, "Ops must be a Long tensor");
+    TORCH_CHECK(Ch.scalar_type() == torch::kInt64, "Ch must be a Long tensor");
+
+    // Ensure contiguity
+    Ops = Ops.contiguous();
+    Ch = Ch.contiguous();
+    C = C.contiguous();
+
+    validate_inputs(Ops, Ch, n_x);
+
+    return SymbolicEvaluationMultiple::apply(X, Ops, Ch, C);
+}
+
+torch::Tensor SymbolicEvaluationMultiple::forward(
+    torch::autograd::AutogradContext *ctx,
+    torch::Tensor X, torch::Tensor Ops, torch::Tensor Ch, torch::Tensor C)
+{
+    const auto device = X.device();
+    const int64_t M = Ops.size(0);
+    const int64_t B = Ops.size(1);
+    const int64_t K = C.size(2);
+    const int64_t N = X.size(0);
+    const int64_t n_x = X.size(1);
+
+    auto cache = torch::zeros({M, N, B, K}, X.options());
+
+    AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_multiple_forward", ([&] {
+        if (device.is_cuda()) {
+            auto cache_acc = cache.packed_accessor64<scalar_t, 4>();
+            auto ops_acc = Ops.packed_accessor64<int64_t, 2>();
+            auto ch_acc = Ch.packed_accessor64<int64_t, 3>();
+            auto x_acc = X.packed_accessor64<scalar_t, 2>();
+            auto c_acc = C.packed_accessor64<scalar_t, 3>();
+            for (int64_t k = 0; k < M; ++k) {
+                evaluation_multiple_forward_step_k_cuda_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, n_x, k, K);
+            }
+        } else {
+            auto cache_acc = cache.accessor<scalar_t, 4>();
+            auto ops_acc = Ops.accessor<int64_t, 2>();
+            auto ch_acc = Ch.accessor<int64_t, 3>();
+            auto x_acc = X.accessor<scalar_t, 2>();
+            auto c_acc = C.accessor<scalar_t, 3>();
+            for (int64_t k = 0; k < M; ++k) {
+                evaluation_multiple_forward_step_k_cpu_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, n_x, k, K);
+            }
+        }
+    }));
+
+    ctx->save_for_backward({X, Ops, Ch, C, cache});
+    return cache;
+}
+
+torch::autograd::variable_list SymbolicEvaluationMultiple::backward(
+    torch::autograd::AutogradContext *ctx,
+    torch::autograd::variable_list grad_outputs)
+{
+    auto saved = ctx->get_saved_variables();
+    auto X = saved[0];
+    auto Ops = saved[1];
+    auto Ch = saved[2];
+    auto C = saved[3];
+    auto cache = saved[4];
+
+    const auto device = X.device();
+    const int64_t M = Ops.size(0);
+    const int64_t K = C.size(2);
+    const int64_t n_x = X.size(1);
+
+    auto grad_output = grad_outputs[0];
+    TORCH_INTERNAL_ASSERT(cache.sizes() == grad_output.sizes(), "Cache and grad_output must have the same shape.");
+    
+    auto grad_cache = grad_output.clone(); // Use clone to avoid in-place modification issues
+    auto grad_X = torch::zeros_like(X);
+    auto grad_C = torch::zeros_like(C);
+
+    auto options = torch::TensorOptions().dtype(torch::kInt32).device(device);
+    auto error_flag_tensor = torch::zeros({1}, options);
+    int32_t *error_flag_ptr = error_flag_tensor.data_ptr<int32_t>();
+
+    AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_multiple_backward", ([&] {
+        if (device.is_cuda()) {
+            auto grad_cache_acc = grad_cache.packed_accessor64<scalar_t, 4>();
+            auto grad_C_acc = grad_C.packed_accessor64<scalar_t, 3>();
+            auto grad_X_acc = grad_X.packed_accessor64<scalar_t, 2>();
+            auto cache_acc = cache.packed_accessor64<scalar_t, 4>();
+            auto ops_acc = Ops.packed_accessor64<int64_t, 2>();
+            auto ch_acc = Ch.packed_accessor64<int64_t, 3>();
+            for (int64_t k = M - 1; k >= 0; --k) {
+                evaluation_multiple_backward_step_k_cuda_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, n_x, k, K, error_flag_ptr);
+            }
+        } else {
+            auto grad_cache_acc = grad_cache.accessor<scalar_t, 4>();
+            auto grad_C_acc = grad_C.accessor<scalar_t, 3>();
+            auto grad_X_acc = grad_X.accessor<scalar_t, 2>();
+            auto cache_acc = cache.accessor<scalar_t, 4>();
+            auto ops_acc = Ops.accessor<int64_t, 2>();
+            auto ch_acc = Ch.accessor<int64_t, 3>();
+            for (int64_t k = M - 1; k >= 0; --k) {
+                evaluation_multiple_backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, n_x, k, K, error_flag_ptr);
+            }
+        }
+    }));
+
+    int32_t error_flag_cpu = error_flag_tensor.item<int32_t>();
+    if (error_flag_cpu != 0) {
+        // Error handling logic copied from original backward pass
+        TORCH_CHECK(false, "Backward error detected in multiple constant evaluation. Error code: ", error_flag_cpu);
+    }
+
+    return {grad_X, torch::Tensor(), torch::Tensor(), grad_C};
+}
 torch::Tensor evaluate_backend(
     torch::Tensor X,   // (N, n_x)
     torch::Tensor Ops, // (M, B)
@@ -258,4 +391,5 @@ void init_symbolic_evaluation(pybind11::module &m)
         .export_values();
 
     m.def("evaluate_backend", static_cast<torch::Tensor (*)(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor)>(&evaluate_backend), "Evaluate a batch of symbolic expressions.");
+    m.def("evaluate_multiple_constant_backend", static_cast<torch::Tensor (*)(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor)>(&evaluate_multiple_constant_backend), "Evaluate a batch of symbolic expressions with multiple sets of constants.");
 }

@@ -50,3 +50,41 @@ void validate_inputs_cpu_impl(
     torch::TensorAccessor<int64_t, 2> ops_acc,
     torch::TensorAccessor<int64_t, 3> ch_acc,
     int32_t *error_flag_ptr);
+
+template <typename scalar_t>
+void evaluation_multiple_forward_step_k_cpu_impl(
+    torch::TensorAccessor<scalar_t, 4> cache_acc,
+    torch::TensorAccessor<int64_t, 2> ops_acc,
+    torch::TensorAccessor<int64_t, 3> ch_acc,
+    torch::TensorAccessor<scalar_t, 2> x_acc,
+    torch::TensorAccessor<scalar_t, 3> c_acc,
+    int64_t n_x, int64_t k, int64_t K);
+
+template <typename scalar_t>
+void evaluation_multiple_backward_step_k_cpu_impl(
+    torch::TensorAccessor<scalar_t, 4> grad_cache_acc,
+    torch::TensorAccessor<scalar_t, 3> grad_c_acc,
+    torch::TensorAccessor<scalar_t, 2> grad_x_acc, // grad_x is shared
+    torch::TensorAccessor<scalar_t, 4> cache_acc,
+    torch::TensorAccessor<int64_t, 2> ops_acc,
+    torch::TensorAccessor<int64_t, 3> ch_acc,
+    int64_t n_x, int64_t k, int64_t K, int32_t *error_flag_ptr);
+
+template <typename scalar_t>
+void evaluation_multiple_forward_step_k_cuda_impl(
+    torch::PackedTensorAccessor64<scalar_t, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> c_acc,
+    int64_t n_x, int64_t k, int64_t K);
+
+template <typename scalar_t>
+void evaluation_multiple_backward_step_k_cuda_impl(
+    torch::PackedTensorAccessor64<scalar_t, 4> grad_cache_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> grad_c_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc, // grad_x is shared
+    torch::PackedTensorAccessor64<scalar_t, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    int64_t n_x, int64_t k, int64_t K, int32_t *error_flag_ptr);

@@ -357,7 +357,7 @@ __global__ void evaluation_backward_step_k_kernel(
             return;
         int64_t ch0_idx = ch_acc[k][b_global][0];
         scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
-        scalar_t g_out0 = g_in * 2 * arg0;
+        scalar_t g_out0 = g_in * static_cast<scalar_t>(2) * arg0;
         gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
         break;
     }
@@ -534,3 +534,400 @@ template void evaluation_backward_step_k_cuda_impl<double>(
     torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
     torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
     int64_t n_x, int64_t k, int32_t *error_flag_ptr);
+
+// --- Forward Pass Kernel for Multiple Constants (CUDA) ---
+template <typename scalar_t>
+__global__ void evaluation_multiple_forward_step_k_kernel(
+    torch::PackedTensorAccessor64<scalar_t, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> c_acc,
+    size_t n_x, size_t k, size_t K)
+{
+    size_t b_global = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t n_global = blockIdx.y * blockDim.y + threadIdx.y;
+
+    const size_t B = ops_acc.size(1);
+    const size_t N = x_acc.size(0);
+
+    if (b_global >= B || n_global >= N)
+        return;
+
+    int64_t op = ops_acc[k][b_global];
+
+    if (op == NO_OP)
+    {
+        for (size_t const_idx = 0; const_idx < K; ++const_idx)
+        {
+            cache_acc[k][n_global][b_global][const_idx] = std::numeric_limits<scalar_t>::quiet_NaN();
+        }
+        return;
+    }
+
+    // This part is shared for all K
+    if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
+    {
+        size_t var_idx = op - VAR_START_ID;
+        scalar_t result = x_acc[n_global][var_idx];
+        for (size_t const_idx = 0; const_idx < K; ++const_idx)
+        {
+            cache_acc[k][n_global][b_global][const_idx] = result;
+        }
+        return;
+    }
+
+    // This part depends on const_idx
+    for (size_t const_idx = 0; const_idx < K; ++const_idx)
+    {
+        scalar_t arg0 = static_cast<scalar_t>(0.0);
+        scalar_t arg1 = static_cast<scalar_t>(0.0);
+
+        const int arity = get_arity(op);
+        if (arity >= 1)
+            arg0 = cache_acc[ch_acc[k][b_global][0]][n_global][b_global][const_idx];
+        if (arity == 2)
+            arg1 = cache_acc[ch_acc[k][b_global][1]][n_global][b_global][const_idx];
+
+        scalar_t result = static_cast<scalar_t>(0.0);
+        switch (op)
+        {
+        case LEARNABLE_CONSTANT:
+            result = c_acc[k][b_global][const_idx];
+            break;
+        case CONST_1:
+            result = static_cast<scalar_t>(1.0);
+            break;
+        case CONST_2:
+            result = static_cast<scalar_t>(2.0);
+            break;
+        case CONST_3:
+            result = static_cast<scalar_t>(3.0);
+            break;
+        case CONST_4:
+            result = static_cast<scalar_t>(4.0);
+            break;
+        case CONST_5:
+            result = static_cast<scalar_t>(5.0);
+            break;
+        case PI:
+            result = static_cast<scalar_t>(M_PI);
+            break;
+        case E:
+            result = static_cast<scalar_t>(M_E);
+            break;
+        case SIN:
+            result = sin_wrapper(arg0);
+            break;
+        case COS:
+            result = cos_wrapper(arg0);
+            break;
+        case EXP:
+            result = exp_wrapper(arg0);
+            break;
+        case LOG:
+            result = log_wrapper(arg0);
+            break;
+        case SQUARE:
+            result = square_wrapper(arg0);
+            break;
+        case SQRT:
+            result = sqrt_wrapper(arg0);
+            break;
+        case ADD:
+            result = add_wrapper(arg0, arg1);
+            break;
+        case SUB:
+            result = sub_wrapper(arg0, arg1);
+            break;
+        case MUL:
+            result = mul_wrapper(arg0, arg1);
+            break;
+        case DIV:
+            result = div_wrapper(arg0, arg1);
+            break;
+        case POW:
+            result = pow_wrapper(arg0, arg1);
+            break;
+        }
+        cache_acc[k][n_global][b_global][const_idx] = result;
+    }
+}
+
+template <typename scalar_t>
+void evaluation_multiple_forward_step_k_cuda_impl(
+    torch::PackedTensorAccessor64<scalar_t, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> c_acc,
+    int64_t n_x, int64_t k, int64_t K)
+{
+    const int64_t B = ops_acc.size(1);
+    const int64_t N = x_acc.size(0);
+    dim3 threadsPerBlock(B_b, N_b);
+    dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                   (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
+
+    evaluation_multiple_forward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
+        cache_acc, ops_acc, ch_acc, x_acc, c_acc, n_x, k, K);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+// --- Backward Pass Kernel for Multiple Constants (CUDA) ---
+template <typename scalar_t>
+__global__ void evaluation_multiple_backward_step_k_kernel(
+    torch::PackedTensorAccessor64<scalar_t, 4> grad_cache_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> grad_c_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    size_t n_x, size_t k, size_t K, int32_t *error_flag_ptr)
+{
+    size_t b_global = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t n_global = blockIdx.y * blockDim.y + threadIdx.y;
+
+    const size_t B = ops_acc.size(1);
+    const size_t N = grad_x_acc.size(0);
+
+    if (b_global >= B || n_global >= N)
+        return;
+
+    int64_t op = ops_acc[k][b_global];
+    if (op == NO_OP)
+        return;
+
+    // Handle variables separately by summing gradients across all constant lanes (K) first
+    if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
+    {
+        scalar_t total_g_in = static_cast<scalar_t>(0.0);
+        for (size_t const_idx = 0; const_idx < K; ++const_idx)
+        {
+            total_g_in += grad_cache_acc[k][n_global][b_global][const_idx];
+        }
+        if (total_g_in != static_cast<scalar_t>(0.0))
+        {
+            gpuAtomicAdd(&grad_x_acc[n_global][op - VAR_START_ID], total_g_in);
+        }
+        return;
+    }
+
+    for (size_t const_idx = 0; const_idx < K; ++const_idx)
+    {
+        scalar_t g_in = grad_cache_acc[k][n_global][b_global][const_idx];
+
+        switch (op)
+        {
+        case LEARNABLE_CONSTANT:
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            gpuAtomicAdd(&grad_c_acc[k][b_global][const_idx], g_in);
+            break;
+        case SIN:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_in * cos_wrapper(arg0));
+            break;
+        }
+        case COS:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_in * -sin_wrapper(arg0));
+            break;
+        }
+        case EXP:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            scalar_t out_val = cache_acc[k][n_global][b_global][const_idx];
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_in * out_val);
+            break;
+        }
+        case LOG:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            scalar_t g_out0;
+            if (arg0 <= 0)
+            {
+                atomicExch(error_flag_ptr, 3);
+                g_out0 = static_cast<scalar_t>(0.0);
+            }
+            else
+            {
+                g_out0 = div_wrapper(g_in, arg0);
+            }
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_out0);
+            break;
+        }
+        case SQUARE:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_in * static_cast<scalar_t>(2) * arg0);
+            break;
+        }
+        case SQRT:
+        {
+            int64_t ch0 = ch_acc[k][b_global][0];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            scalar_t g_out0;
+            if (arg0 < static_cast<scalar_t>(0.0))
+            {
+                g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+            }
+            else
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    g_out0 = static_cast<scalar_t>(0.0);
+                else
+                    g_out0 = div_wrapper(g_in * static_cast<scalar_t>(0.5), sqrt_wrapper(arg0));
+            }
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_out0);
+            break;
+        }
+        case ADD:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            int64_t ch1 = ch_acc[k][b_global][1];
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_in);
+            gpuAtomicAdd(&grad_cache_acc[ch1][n_global][b_global][const_idx], g_in);
+            break;
+        }
+        case SUB:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            int64_t ch1 = ch_acc[k][b_global][1];
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_in);
+            gpuAtomicAdd(&grad_cache_acc[ch1][n_global][b_global][const_idx], -g_in);
+            break;
+        }
+        case MUL:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            int64_t ch1 = ch_acc[k][b_global][1];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            scalar_t arg1 = cache_acc[ch1][n_global][b_global][const_idx];
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_in * arg1);
+            gpuAtomicAdd(&grad_cache_acc[ch1][n_global][b_global][const_idx], g_in * arg0);
+            break;
+        }
+        case DIV:
+        {
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            int64_t ch0 = ch_acc[k][b_global][0];
+            int64_t ch1 = ch_acc[k][b_global][1];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            scalar_t arg1 = cache_acc[ch1][n_global][b_global][const_idx];
+            scalar_t g_out0, g_out1;
+            if (arg1 == 0)
+            {
+                atomicExch(error_flag_ptr, 5);
+                g_out0 = static_cast<scalar_t>(0.0);
+                g_out1 = static_cast<scalar_t>(0.0);
+            }
+            else
+            {
+                g_out0 = div_wrapper(g_in, arg1);
+                g_out1 = -div_wrapper(g_in * arg0, mul_wrapper(arg1, arg1));
+            }
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_out0);
+            gpuAtomicAdd(&grad_cache_acc[ch1][n_global][b_global][const_idx], g_out1);
+            break;
+        }
+        case POW:
+        {
+            int64_t ch0 = ch_acc[k][b_global][0];
+            int64_t ch1 = ch_acc[k][b_global][1];
+            scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
+            scalar_t arg1 = cache_acc[ch1][n_global][b_global][const_idx];
+            scalar_t g_out0, g_out1;
+            if (arg0 < static_cast<scalar_t>(0.0))
+            {
+                g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                g_out1 = std::numeric_limits<scalar_t>::quiet_NaN();
+            }
+            else
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                g_out0 = mul_wrapper(g_in, mul_wrapper(pow_wrapper(arg0, sub_wrapper(arg1, static_cast<scalar_t>(1.0))), arg1));
+                g_out1 = mul_wrapper(g_in, mul_wrapper(log_wrapper(arg0), pow_wrapper(arg0, arg1)));
+            }
+            gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_out0);
+            gpuAtomicAdd(&grad_cache_acc[ch1][n_global][b_global][const_idx], g_out1);
+            break;
+        }
+        default:
+            // This default case is now only for potential future ops, as VARs are handled above.
+            // But we keep it for robustness.
+            if (g_in == static_cast<scalar_t>(0.0))
+                continue;
+            if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
+            {
+                gpuAtomicAdd(&grad_x_acc[n_global][op - VAR_START_ID], g_in);
+            }
+        }
+    }
+}
+
+template <typename scalar_t>
+void evaluation_multiple_backward_step_k_cuda_impl(
+    torch::PackedTensorAccessor64<scalar_t, 4> grad_cache_acc,
+    torch::PackedTensorAccessor64<scalar_t, 3> grad_c_acc,
+    torch::PackedTensorAccessor64<scalar_t, 2> grad_x_acc,
+    torch::PackedTensorAccessor64<scalar_t, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    int64_t n_x, int64_t k, int64_t K, int32_t *error_flag_ptr)
+{
+    const int64_t B = ops_acc.size(1);
+    const int64_t N = grad_x_acc.size(0);
+    dim3 threadsPerBlock(B_b, N_b);
+    dim3 numBlocks((B + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                   (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
+
+    evaluation_multiple_backward_step_k_kernel<scalar_t><<<numBlocks, threadsPerBlock>>>(
+        grad_cache_acc, grad_c_acc, grad_x_acc, cache_acc, ops_acc, ch_acc, n_x, k, K, error_flag_ptr);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+// Explicit template instantiation for scalar types
+template void evaluation_multiple_forward_step_k_cuda_impl<float>(
+    torch::PackedTensorAccessor64<float, 4> cache_acc, torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc, torch::PackedTensorAccessor64<float, 2> x_acc,
+    torch::PackedTensorAccessor64<float, 3> c_acc, int64_t n_x, int64_t k, int64_t K);
+template void evaluation_multiple_backward_step_k_cuda_impl<float>(
+    torch::PackedTensorAccessor64<float, 4> grad_cache_acc, torch::PackedTensorAccessor64<float, 3> grad_c_acc,
+    torch::PackedTensorAccessor64<float, 2> grad_x_acc, torch::PackedTensorAccessor64<float, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc, torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    int64_t n_x, int64_t k, int64_t K, int32_t *error_flag_ptr);
+
+template void evaluation_multiple_forward_step_k_cuda_impl<double>(
+    torch::PackedTensorAccessor64<double, 4> cache_acc, torch::PackedTensorAccessor64<int64_t, 2> ops_acc,
+    torch::PackedTensorAccessor64<int64_t, 3> ch_acc, torch::PackedTensorAccessor64<double, 2> x_acc,
+    torch::PackedTensorAccessor64<double, 3> c_acc, int64_t n_x, int64_t k, int64_t K);
+template void evaluation_multiple_backward_step_k_cuda_impl<double>(
+    torch::PackedTensorAccessor64<double, 4> grad_cache_acc, torch::PackedTensorAccessor64<double, 3> grad_c_acc,
+    torch::PackedTensorAccessor64<double, 2> grad_x_acc, torch::PackedTensorAccessor64<double, 4> cache_acc,
+    torch::PackedTensorAccessor64<int64_t, 2> ops_acc, torch::PackedTensorAccessor64<int64_t, 3> ch_acc,
+    int64_t n_x, int64_t k, int64_t K, int32_t *error_flag_ptr);

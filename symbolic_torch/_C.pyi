@@ -42,7 +42,32 @@ def evaluate_backend(
     Ops: Tensor of operations specified by integers (see Operator Enum) of shape (M, B) for the expressions in postfix order. If some operations are not used, they can be set to NO_OP.
     Ch: Tensor of postfix order indices for the children of nodes in the expressions of shape (M, B, 2). If the operation has less than MAX_ARITY = 2 children, the unused children must be set to -1.
     C: Tensor of learnable constants of shape (M, B). For any (m, b) where Ops[m,b] is not a LEARNABLE_CONSTANT, the value of C[m,b] is ignored.
+
+    Returns:
+    A tensor of shape (M, N, B) containing the evaluated results for each expression in the batch and each datapoint.
     
+    """
+    ...
+
+def evaluate_multiple_constant_backend(
+    X: torch.Tensor, # (N, n_x)
+    Ops: torch.Tensor, # (M, B)
+    Ch: torch.Tensor, # (M, B, MAX_ARITY)
+    C: torch.Tensor # (M, B, K)
+) -> torch.Tensor: # (M, N, B, K)
+    """
+    Evaluates a batch of symbolic expressions, each with K different sets of constants.
+
+    Let M be the maximum number of operations, B the batch size, N the number of datapoints, 
+    n_x the number of variables, and K the number of constant sets per expression.
+
+    X: Input tensor for variables, shape (N, n_x).
+    Ops: Tensor of operations in postfix order, shape (M, B).
+    Ch: Tensor of children indices for each operation, shape (M, B, MAX_ARITY).
+    C: Tensor of K sets of learnable constants for each expression, shape (M, B, K).
+    
+    Returns:
+    A tensor of shape (M, N, B, K) containing the evaluated results for each expression in the batch and each set of constants for each datapoint.
     """
     ...
 
