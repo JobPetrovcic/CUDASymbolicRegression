@@ -50,6 +50,14 @@ public:
 
     torch::Device device;
 
+    // --- Exposed Parameters ---
+    std::string start_symbol;
+    int64_t padded_maximum_length;
+    int64_t max_tries;
+    int64_t n_variables;
+    float tolerance;
+    bool verbose;
+
     // Getters symbol
     int64_t get_symbol_id(const std::string &symbol) const
     {
@@ -72,16 +80,8 @@ public:
     }
 
 private:
-    std::string start_symbol;
-
-    int64_t padded_maximum_length;
-    int64_t max_tries;
-    int64_t n_variables;
     int64_t terminal_limit;
     int64_t new_symbol_id_t;
-
-    float tolerance;
-    bool verbose;
 
     std::unordered_map<std::string, int64_t> symbol_to_id;
     std::unordered_map<int64_t, std::string> id_to_symbol;

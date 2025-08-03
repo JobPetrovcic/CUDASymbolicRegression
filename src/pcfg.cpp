@@ -910,6 +910,12 @@ void init_pcfg(pybind11::module &m)
         .def("prefix_to_infix", &ProbabilisticContextFreeGrammar::prefix_to_infix, "Convert a batch of prefix expressions to infix tensors.")
 
         .def_readonly("device", &ProbabilisticContextFreeGrammar::device)
+        .def_readonly("start_symbol", &ProbabilisticContextFreeGrammar::start_symbol)
+        .def_readonly("padded_maximum_length", &ProbabilisticContextFreeGrammar::padded_maximum_length)
+        .def_readonly("n_variables", &ProbabilisticContextFreeGrammar::n_variables)
+        .def_readonly("max_tries", &ProbabilisticContextFreeGrammar::max_tries)
+        .def_readonly("tolerance", &ProbabilisticContextFreeGrammar::tolerance)
+        .def_readonly("verbose", &ProbabilisticContextFreeGrammar::verbose)
         .def("get_symbol_id", &ProbabilisticContextFreeGrammar::get_symbol_id, "Get the ID of a symbol",
              pybind11::arg("symbol"))
         .def_readonly("n_operators", &ProbabilisticContextFreeGrammar::n_operators, "Get the number of operators in the grammar")

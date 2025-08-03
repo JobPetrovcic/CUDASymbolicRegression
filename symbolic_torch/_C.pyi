@@ -73,6 +73,12 @@ def evaluate_multiple_constant_backend(
 
 class ProbabilisticContextFreeGrammar:
     device: torch.device
+    start_symbol: str
+    padded_maximum_length: int
+    n_variables: int
+    max_tries: int
+    tolerance: float
+    verbose: bool
 
     def __init__(
         self,
