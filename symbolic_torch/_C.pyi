@@ -79,6 +79,7 @@ class ProbabilisticContextFreeGrammar:
     max_tries: int
     tolerance: float
     verbose: bool
+    n_operators: int
 
     def __init__(
         self,
@@ -111,6 +112,8 @@ class ProbabilisticContextFreeGrammar:
     def prefix_to_infix(self, expressions: torch.Tensor, max_infix_len : int) -> torch.Tensor:
         ...
     def get_symbol_id(self, symbol: str) -> int:
+        ...
+    def get_arities(self) -> torch.Tensor:
         ...
 
 def get_arity(op: Operator) -> int:
