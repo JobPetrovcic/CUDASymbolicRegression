@@ -900,12 +900,12 @@ __global__ void postfix_to_infix_kernel(
     errors_acc[b] = 0;
 
     // Per-thread workspace for building sub-expressions
-    int64_t workspace[HARD_MAX_LENGTH];
+    int64_t workspace[HARD_MAX_LENGTH * 2];
     int32_t workspace_ptr = 0;
 
     // Stack holds pointers (start_idx, len) into the workspace
-    int32_t stack_starts[HARD_MAX_LENGTH];
-    int32_t stack_lens[HARD_MAX_LENGTH];
+    int32_t stack_starts[HARD_MAX_LENGTH * 2];
+    int32_t stack_lens[HARD_MAX_LENGTH * 2];
     int32_t stack_ptr = 0;
 
     for (int j = 0; j < M_postfix; ++j)
@@ -918,7 +918,7 @@ __global__ void postfix_to_infix_kernel(
 
         if (arity == 0)
         { // Operand
-            if (stack_ptr >= HARD_MAX_LENGTH || workspace_ptr >= HARD_MAX_LENGTH)
+            if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
             {
                 errors_acc[b] = 2;
                 break;
@@ -942,7 +942,7 @@ __global__ void postfix_to_infix_kernel(
             // Functional style: op(operand)
             if (is_functional_style(token_id))
             {
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH)
+                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
                     errors_acc[b] = 2;
                     break;
@@ -959,7 +959,7 @@ __global__ void postfix_to_infix_kernel(
             }
             else
             { // Postfix style: (operand)^2
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH)
+                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
                     errors_acc[b] = 2;
                     break;
@@ -988,7 +988,7 @@ __global__ void postfix_to_infix_kernel(
             int32_t op1_start = stack_starts[stack_ptr];
             int32_t op1_len = stack_lens[stack_ptr];
 
-            if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH)
+            if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH * 2)
             {
                 errors_acc[b] = 2;
                 break;
@@ -1058,12 +1058,12 @@ __global__ void prefix_to_infix_kernel(
     errors_acc[b] = 0;
 
     // Per-thread workspace for building sub-expressions
-    int64_t workspace[HARD_MAX_LENGTH];
+    int64_t workspace[HARD_MAX_LENGTH * 2];
     int32_t workspace_ptr = 0;
 
     // Stack holds pointers (start_idx, len) into the workspace
-    int32_t stack_starts[HARD_MAX_LENGTH];
-    int32_t stack_lens[HARD_MAX_LENGTH];
+    int32_t stack_starts[HARD_MAX_LENGTH * 2];
+    int32_t stack_lens[HARD_MAX_LENGTH * 2];
     int32_t stack_ptr = 0;
 
     // Find the actual length of the expression to avoid processing padding
@@ -1082,7 +1082,7 @@ __global__ void prefix_to_infix_kernel(
 
         if (arity == 0)
         { // Operand
-            if (stack_ptr >= HARD_MAX_LENGTH || workspace_ptr >= HARD_MAX_LENGTH)
+            if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
             {
                 errors_acc[b] = 2;
                 break;
@@ -1106,7 +1106,7 @@ __global__ void prefix_to_infix_kernel(
             // Functional style: op(operand)
             if (is_functional_style(token_id))
             {
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH)
+                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
                     errors_acc[b] = 2;
                     break;
@@ -1121,7 +1121,7 @@ __global__ void prefix_to_infix_kernel(
             }
             else
             { // Postfix style: (operand)^2
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH)
+                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
                     errors_acc[b] = 2;
                     break;
@@ -1151,7 +1151,7 @@ __global__ void prefix_to_infix_kernel(
             int32_t op2_start = stack_starts[stack_ptr];
             int32_t op2_len = stack_lens[stack_ptr];
 
-            if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH)
+            if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH * 2)
             {
                 errors_acc[b] = 2;
                 break;
