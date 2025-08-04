@@ -11,6 +11,10 @@ git clone https://github.com/your-username/symbolic-torch.git
 cd symbolic-torch
 pip install .
 ```
+or, succinctly,
+```bash
+pip install git+https://github.com/your-username/symbolic-torch.git
+```
 
 ## Quick Start Example
 
