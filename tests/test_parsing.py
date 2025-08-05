@@ -2,6 +2,7 @@ import torch
 import pytest
 from symbolic_torch import ProbabilisticContextFreeGrammar, Operator
 import time
+from typing import List
 
 # NOTE: All tests should be parameterized with device=["cpu", "cuda"] to ensure both backends are tested.
 
@@ -722,3 +723,62 @@ def test_benchmark_parsing_parent_cpu_vs_cuda():
     torch.cuda.synchronize()
     cuda_time = (time.time() - start_time) / N_BENCH_LOOPS
     print(f"CUDA parent parsing time: {cuda_time:.4f}s")
+
+
+# ===============================================
+# Tests for Error Reporting and Verbosity
+# ===============================================
+def to_ids(pcfg_obj: ProbabilisticContextFreeGrammar, tokens: List[str]) -> torch.Tensor:
+    return torch.tensor([pcfg_obj.get_symbol_id(s) for s in tokens], dtype=torch.int64, device=pcfg_obj.device)
+
+def test_parsing_error_verbosity(pcfg: ProbabilisticContextFreeGrammar):
+    """Tests the new error reporting with different verbosity levels."""
+    
+    # Batch of expressions with valid and invalid items
+    expressions_str = [
+        "X_0 + 5",         # Valid
+        "( X_0 + 5",       # Invalid: Mismatched parenthesis
+        "sin ( X_0 )",     # Valid
+        "*",               # Invalid: Malformed (binary op without operands)
+        "cos ( X_0"        # Invalid: Mismatched parenthesis
+    ]
+    
+    max_len = max(len(s.split()) for s in expressions_str)
+    
+    # Create padded tensor of IDs
+    expressions_list_padded = [s.split() + ['NO_OP'] * (max_len - len(s.split())) for s in expressions_str]
+    expressions_tensor = torch.stack([to_ids(pcfg, tokens) for tokens in expressions_list_padded])
+
+    # --- Test verbosity=0 (default, summary only) ---
+    with pytest.raises(RuntimeError) as excinfo:
+        pcfg.parse_to_postfix(expressions_tensor, verbosity=0)
+    
+    err_str_v0 = str(excinfo.value)
+    assert "Error Summary:" in err_str_v0
+    assert "Parsing failed: Mismatched or unbalanced parentheses.: 2 occurrences" in err_str_v0
+    assert "Parsing failed: Malformed expression (e.g., too many operands).: 1 occurrences" in err_str_v0
+    assert "Displaying" not in err_str_v0
+    assert "Problem at Index" not in err_str_v0
+
+    # --- Test verbosity=1 (summary + up to 5 examples) ---
+    with pytest.raises(RuntimeError) as excinfo:
+        pcfg.parse_to_postfix(expressions_tensor, verbosity=1)
+        
+    err_str_v1 = str(excinfo.value)
+    assert "Error Summary:" in err_str_v1
+    assert "Parsing failed: Mismatched or unbalanced parentheses.: 2 occurrences" in err_str_v1
+    assert "Displaying 3 out of 3 problematic expressions" in err_str_v1
+    assert "Problem at Index: 1" in err_str_v1
+    assert "Input Expression: '( X_0 + 5'" in err_str_v1
+    assert "Problem at Index: 3" in err_str_v1
+    assert "Input Expression: '*'" in err_str_v1
+    assert "Problem at Index: 4" in err_str_v1
+    assert "Input Expression: 'cos ( X_0'" in err_str_v1
+    
+    # --- Test verbosity=2 (summary + all examples) ---
+    with pytest.raises(RuntimeError) as excinfo:
+        pcfg.parse_to_postfix(expressions_tensor, verbosity=2)
+
+    err_str_v2 = str(excinfo.value)
+    # Since we have < 5 errors, output should be identical to verbosity=1
+    assert err_str_v1 == err_str_v2

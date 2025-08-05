@@ -1,6 +1,7 @@
 #include "symbolic_evaluation.h"
 #include <iostream>
 #include <c10/cuda/CUDAStream.h>
+#include "error_codes.h"
 
 // --- Helper Functions ---
 void validate_inputs(const torch::Tensor &Ops, const torch::Tensor &Ch, int n_x)
@@ -27,7 +28,12 @@ void validate_inputs(const torch::Tensor &Ops, const torch::Tensor &Ch, int n_x)
     }
 
     int32_t error_flag_cpu = error_flag_tensor.item<int32_t>();
-    TORCH_CHECK(error_flag_cpu == 0, "Input validation failed. This may be due to an invalid operator or child index.");
+    if (error_flag_cpu != 0)
+    {
+        ErrorCode code = static_cast<ErrorCode>(error_flag_cpu);
+        std::string message = getErrorMessage(code, "input validation");
+        TORCH_CHECK(false, message);
+    }
 }
 
 torch::Tensor SymbolicEvaluation::forward(
@@ -150,27 +156,9 @@ torch::autograd::variable_list SymbolicEvaluation::backward(
     // Check for errors from the backward pass
     if (error_flag_cpu != 0)
     {
-        switch (error_flag_cpu)
-        {
-        case 1:
-            TORCH_CHECK(false, "Backward error: NaN/inf gradient detected. Error code 1.");
-            break;
-        case 2:
-            TORCH_CHECK(false, "Backward error: Gradient propagated to a NO_OP node. Error code 2.");
-            break;
-        case 3:
-            TORCH_CHECK(false, "Backward error: Gradient propagated to a LOG node with a non-positive argument. Error code 3.");
-            break;
-        case 4:
-            TORCH_CHECK(false, "Backward error: Gradient propagated to a SQRT node with a non-positive argument. Error code 4.");
-            break;
-        case 5:
-            TORCH_CHECK(false, "Backward error: Gradient propagated to a DIV node with a zero denominator. Error code 5.");
-            break;
-        default:
-            TORCH_CHECK(false, "Unknown backward error. Error code: ", error_flag_cpu);
-            break;
-        }
+        ErrorCode code = static_cast<ErrorCode>(error_flag_cpu);
+        std::string message = getErrorMessage(code, "symbolic evaluation backward pass");
+        TORCH_CHECK(false, message);
     }
 
     return {grad_X,
@@ -228,7 +216,8 @@ torch::Tensor SymbolicEvaluationMultiple::forward(
 
     auto cache = torch::zeros({M, N, B, K}, X.options());
 
-    AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_multiple_forward", ([&] {
+    AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_multiple_forward", ([&]
+                                                                              {
         if (device.is_cuda()) {
             auto cache_acc = cache.packed_accessor64<scalar_t, 4>();
             auto ops_acc = Ops.packed_accessor64<int64_t, 2>();
@@ -247,8 +236,7 @@ torch::Tensor SymbolicEvaluationMultiple::forward(
             for (int64_t k = 0; k < M; ++k) {
                 evaluation_multiple_forward_step_k_cpu_impl<scalar_t>(cache_acc, ops_acc, ch_acc, x_acc, c_acc, n_x, k, K);
             }
-        }
-    }));
+        } }));
 
     ctx->save_for_backward({X, Ops, Ch, C, cache});
     return cache;
@@ -272,7 +260,7 @@ torch::autograd::variable_list SymbolicEvaluationMultiple::backward(
 
     auto grad_output = grad_outputs[0];
     TORCH_INTERNAL_ASSERT(cache.sizes() == grad_output.sizes(), "Cache and grad_output must have the same shape.");
-    
+
     auto grad_cache = grad_output.clone(); // Use clone to avoid in-place modification issues
     auto grad_X = torch::zeros_like(X);
     auto grad_C = torch::zeros_like(C);
@@ -281,7 +269,8 @@ torch::autograd::variable_list SymbolicEvaluationMultiple::backward(
     auto error_flag_tensor = torch::zeros({1}, options);
     int32_t *error_flag_ptr = error_flag_tensor.data_ptr<int32_t>();
 
-    AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_multiple_backward", ([&] {
+    AT_DISPATCH_FLOATING_TYPES(X.scalar_type(), "symbolic_multiple_backward", ([&]
+                                                                               {
         if (device.is_cuda()) {
             auto grad_cache_acc = grad_cache.packed_accessor64<scalar_t, 4>();
             auto grad_C_acc = grad_C.packed_accessor64<scalar_t, 3>();
@@ -302,13 +291,14 @@ torch::autograd::variable_list SymbolicEvaluationMultiple::backward(
             for (int64_t k = M - 1; k >= 0; --k) {
                 evaluation_multiple_backward_step_k_cpu_impl<scalar_t>(grad_cache_acc, grad_C_acc, grad_X_acc, cache_acc, ops_acc, ch_acc, n_x, k, K, error_flag_ptr);
             }
-        }
-    }));
+        } }));
 
     int32_t error_flag_cpu = error_flag_tensor.item<int32_t>();
-    if (error_flag_cpu != 0) {
-        // Error handling logic copied from original backward pass
-        TORCH_CHECK(false, "Backward error detected in multiple constant evaluation. Error code: ", error_flag_cpu);
+    if (error_flag_cpu != 0)
+    {
+        ErrorCode code = static_cast<ErrorCode>(error_flag_cpu);
+        std::string message = getErrorMessage(code, "symbolic evaluation (multiple constants) backward pass");
+        TORCH_CHECK(false, message);
     }
 
     return {grad_X, torch::Tensor(), torch::Tensor(), grad_C};
