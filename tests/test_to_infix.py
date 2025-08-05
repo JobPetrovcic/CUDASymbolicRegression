@@ -180,24 +180,24 @@ class TestConversionErrors:
         string_expr = to_ids(pcfg, ['X_0', '+', '5']).unsqueeze(0)
         postfix_ops, _ = pcfg.parse_to_postfix(string_expr)
         
-        with pytest.raises(RuntimeError, match="postfix to infix expression too long"):
+        with pytest.raises(RuntimeError, match=" Resulting infix expression is longer than the maximum allowed length"):
             pcfg.postfix_to_infix(postfix_ops, 4)
 
     def test_prefix_to_infix_output_too_short(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
         string_expr = to_ids(pcfg, ['X_0', '+', '5']).unsqueeze(0)
         prefix_ops, _ = pcfg.parse_to_prefix(string_expr)
         
-        with pytest.raises(RuntimeError, match="prefix to infix expression too long"):
+        with pytest.raises(RuntimeError, match=" Resulting infix expression is longer than the maximum allowed length"):
             pcfg.prefix_to_infix(prefix_ops, 4)
 
     def test_postfix_malformed_input(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
         malformed_postfix = to_ids(pcfg, ['X_0', '+']).unsqueeze(0)
         
-        with pytest.raises(RuntimeError, match="Binary operator without enough operands"):
+        with pytest.raises(RuntimeError, match="Malformed input, binary operator is missing one or both operands."):
             pcfg.postfix_to_infix(malformed_postfix, 10)
 
     def test_prefix_malformed_input(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
         malformed_prefix = to_ids(pcfg, ['+', 'X_0', 'NO_OP']).unsqueeze(0)
         
-        with pytest.raises(RuntimeError, match="Binary operator without enough operands"):
+        with pytest.raises(RuntimeError, match="Malformed input, binary operator is missing one or both operands."):
             pcfg.prefix_to_infix(malformed_prefix, 10)

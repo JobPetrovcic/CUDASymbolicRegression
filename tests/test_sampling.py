@@ -107,6 +107,7 @@ def test_binary_operator_grammar(device: Literal["cpu", "cuda"], op: str, op_id:
     for s in strings:
         assert op_symbol in s or s == "1"
 
+@pytest.mark.large
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_test_grammar(device: Literal["cpu", "cuda"]):
     if not torch.cuda.is_available() and device == "cuda":
@@ -191,6 +192,7 @@ def sample_from_grammar(rules : dict[str, list[tuple[list[str], float]]], start_
             return generated
 
 # --- Test comparing probabilities ---
+@pytest.mark.large
 def test_python_vs_cpp_cuda_probabilities():
     limit = 128
     grammar = test_grammar

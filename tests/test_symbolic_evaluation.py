@@ -205,14 +205,14 @@ def test_validate_inputs_arity(device : str) -> None:
         # Set one too many children
         if arity < 2:
             ch_tensor[arity, 0, arity] = 0
-            with pytest.raises(RuntimeError, match="Input validation failed"):
+            with pytest.raises(RuntimeError, match="Validation failed: Operator arity does not match the number of children."):
                 build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
         
         if arity == 2:
             # For binary ops, test with one too few children
             ch_tensor_one_less = ch_tensor.clone()
             ch_tensor_one_less[arity, 0, arity - 1] = NULL_CHILD
-            with pytest.raises(RuntimeError, match="Input validation failed"):
+            with pytest.raises(RuntimeError, match="Validation failed: Operator arity does not match the number of children."):
                 build_and_run(x_tensor, ops_tensor, ch_tensor_one_less, c_tensor, device=device)
         elif arity == 1:
             # For unary ops, test with one too few children.
@@ -233,7 +233,7 @@ def test_validate_inputs_arity(device : str) -> None:
             # create_constants expects (B,M), test ops_tensor is (M,B)
             c_tensor_unary_fail = symbolic_torch.create_constants(ops_tensor_unary_fail.permute(1,0))
             c_tensor_unary_fail = c_tensor_unary_fail.permute(1,0)
-            with pytest.raises(RuntimeError, match="Input validation failed"):
+            with pytest.raises(RuntimeError, match="Validation failed: Operator arity does not match the number of children."):
                 build_and_run(x_tensor, ops_tensor_unary_fail, ch_tensor_unary_fail, c_tensor_unary_fail, device=device)
 
 def test_validate_inputs_child_index_too_large(device : str) -> None:
@@ -245,7 +245,7 @@ def test_validate_inputs_child_index_too_large(device : str) -> None:
     # create_constants expects (B,M), test ops_tensor is (M,B)
     c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
     c_tensor = c_tensor.permute(1,0)
-    with pytest.raises(RuntimeError, match="Input validation failed"):
+    with pytest.raises(RuntimeError, match="Error during input validation: Validation failed: A child's index is greater than or equal to its parent's."):
         build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
 
 def test_validate_inputs_unary_op_no_children(device: str) -> None:
@@ -256,7 +256,7 @@ def test_validate_inputs_unary_op_no_children(device: str) -> None:
         # create_constants expects (B,M), test ops_tensor is (M,B)
         c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
         c_tensor = c_tensor.permute(1,0)
-        with pytest.raises(RuntimeError, match="Input validation failed"):
+        with pytest.raises(RuntimeError, match="Error during input validation: Validation failed: Operator arity does not match the number of children."):
             build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
 
 def test_validate_inputs_binary_op_no_children(device: str) -> None:
@@ -267,7 +267,7 @@ def test_validate_inputs_binary_op_no_children(device: str) -> None:
         # create_constants expects (B,M), test ops_tensor is (M,B)
         c_tensor = symbolic_torch.create_constants(ops_tensor.permute(1,0))
         c_tensor = c_tensor.permute(1,0)
-        with pytest.raises(RuntimeError, match="Input validation failed"):
+        with pytest.raises(RuntimeError, match="Error during input validation: Validation failed: Operator arity does not match the number of children."):
             build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=device)
 
 # 2. Test datatype checking
@@ -458,6 +458,7 @@ def test_gradients(device: str, op: int) -> None:
         assert torch.allclose(custom_c_grad, manual_c_grad, atol=1e-5, equal_nan=True)
 
 # 9. Benchmark
+@pytest.mark.benchmark
 def test_benchmark() -> None:
     B, N, n_x = 4024, 1024, 4
     x_tensor = torch.randn(N, n_x, dtype=torch.float32)
@@ -509,6 +510,7 @@ def test_benchmark() -> None:
         print(f"Custom C++ (GPU): {gpu_time:.4f}s")
 
 # 10. Larger Benchmark
+@pytest.mark.large
 def test_large_benchmark() -> None:
     B, N, n_x = 8192, 2048, 8
     x_tensor = torch.randn(N, n_x, dtype=torch.float32)
@@ -581,6 +583,7 @@ def test_large_benchmark() -> None:
         gpu_time = time.time() - start_time
         print(f"Large Benchmark - Custom C++ (GPU): {gpu_time:.4f}s")
 
+
 # 10. Test error handling for gradients on invalid operations
 @pytest.mark.parametrize("op", [
     Operator.NO_OP,
@@ -600,6 +603,7 @@ def test_gradient_on_invalid_op(op: int, device: str):
         ch_tensor[1, :, 0] = 0
         x_tensor[0, 0] = 0
         c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
+        expected_error = "Error during symbolic evaluation backward pass: Backward pass error: Gradient for log\(x\) where x <= 0\."
     elif op == int(Operator.DIV):
         # 1/0
         ops_tensor = torch.tensor([[int(Operator.CONST_1)], [int(Operator.VAR_START_ID)], [int(Operator.DIV)]], dtype=torch.int64).expand(-1, B)
@@ -608,16 +612,17 @@ def test_gradient_on_invalid_op(op: int, device: str):
         ch_tensor[2, :, 1] = 1
         x_tensor[0, 0] = 0
         c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
+        expected_error = "a/b where b = 0"
     elif op == int(Operator.NO_OP):
         ops_tensor = torch.tensor([[int(Operator.NO_OP)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(1, B, 2, dtype=torch.int64)
         c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
+        expected_error = "passed to a NO_OP node"
     else:
         raise ValueError(f"Unsupported operator for gradient test: {op}")
     
-    with pytest.raises(RuntimeError, match="Backward error: Gradient propagated to a"):
+    with pytest.raises(RuntimeError, match=expected_error):
         build_and_run_with_grad(x_tensor, ops_tensor, ch_tensor, c_tensor, grad_output, null_nan_output_grad=False, device=device, use_custom_kernel=True)
-
 
 if __name__ == "__main__":
     pytest.main()

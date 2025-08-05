@@ -463,7 +463,7 @@ def test_parse_to_prefix_max_length(pcfg: ProbabilisticContextFreeGrammar):
     assert children.shape[1] == 2 * num_ones - 1
     assert ops[0, 0] == int(Operator.ADD) # first op is Operator.ADD
 
-
+@pytest.mark.large
 def test_benchmark_parsing_cpu_vs_cuda():
     import time
 
@@ -679,7 +679,7 @@ def test_parse_to_prefix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
         assert torch.all(batch_ops[i, len_single_ops:] == int(Operator.NO_OP))
         assert torch.all(batch_parents[i, len_single_ops:] == int(Operator.NO_OP))
 
-
+@pytest.mark.large
 def test_benchmark_parsing_parent_cpu_vs_cuda():
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
@@ -755,8 +755,8 @@ def test_parsing_error_verbosity(pcfg: ProbabilisticContextFreeGrammar):
     
     err_str_v0 = str(excinfo.value)
     assert "Error Summary:" in err_str_v0
-    assert "Parsing failed: Mismatched or unbalanced parentheses.: 2 occurrences" in err_str_v0
-    assert "Parsing failed: Malformed expression (e.g., too many operands).: 1 occurrences" in err_str_v0
+    assert "Parsing failed: Mismatched or unbalanced parentheses.: 2 occurrences." in err_str_v0
+    assert "Binary operator is missing one or both operands during tree construction.: 1 occurrences." in err_str_v0
     assert "Displaying" not in err_str_v0
     assert "Problem at Index" not in err_str_v0
 
