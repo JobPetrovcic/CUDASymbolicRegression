@@ -782,3 +782,4 @@ def test_parsing_error_verbosity(pcfg: ProbabilisticContextFreeGrammar):
     err_str_v2 = str(excinfo.value)
     # Since we have < 5 errors, output should be identical to verbosity=1
     assert err_str_v1 == err_str_v2
+    

@@ -201,3 +201,30 @@ class TestConversionErrors:
         
         with pytest.raises(RuntimeError, match="Malformed input, binary operator is missing one or both operands."):
             pcfg.prefix_to_infix(malformed_prefix, 10)
+# In /tests/test_to_infix.py, inside class TestConversionErrors:
+
+    def test_postfix_malformed_unary(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        malformed_postfix = to_ids(pcfg, ['sin']).unsqueeze(0)
+        
+        with pytest.raises(RuntimeError, match="Malformed input, unary operator is missing an operand"):
+            pcfg.postfix_to_infix(malformed_postfix, 10)
+
+    def test_prefix_malformed_unary(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        malformed_prefix = to_ids(pcfg, ['sin']).unsqueeze(0)
+        
+        with pytest.raises(RuntimeError, match="Malformed input, unary operator is missing an operand"):
+            pcfg.prefix_to_infix(malformed_prefix, 10)
+            
+    def test_postfix_malformed_extra_operands(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        # Postfix for "(X_0 + X_0) X_0" - leaves two items on stack
+        malformed_postfix = to_ids(pcfg, ['X_0', 'X_0', '+', 'X_0']).unsqueeze(0)
+        
+        with pytest.raises(RuntimeError, match="Malformed input \\(e.g., too many operands\\)"):
+            pcfg.postfix_to_infix(malformed_postfix, 20)
+
+    def test_prefix_malformed_extra_operands(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        # Prefix for "X_0 (+ X_0 X_0)" - leaves two items on stack
+        malformed_prefix = to_ids(pcfg, ['X_0', '+', 'X_0', 'X_0']).unsqueeze(0)
+        
+        with pytest.raises(RuntimeError, match="Malformed input \\(e.g., too many operands\\)"):
+            pcfg.prefix_to_infix(malformed_prefix, 20)

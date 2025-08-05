@@ -190,6 +190,30 @@ def sample_from_grammar(rules : dict[str, list[tuple[list[str], float]]], start_
         generated = expand(start_symbol, 0)
         if generated is not None:
             return generated
+        
+def test_generation_max_tries_exceeded():
+    """
+    Tests that the PCFG raises an error when it cannot generate a valid
+    expression within the `max_tries` limit.
+    """
+    # This grammar can only produce expressions of length 1, 2, 3, ...
+    # It cannot terminate.
+    grammar = "S -> 1 S [1.0]"
+    
+    # By setting max_length=5 and max_tries=10, the generator will
+    # repeatedly try to generate `1 1 1 1 1 S`, overflow the length, and restart.
+    # After 10 tries, it should give up.
+    pcfg = ProbabilisticContextFreeGrammar(
+        grammar=grammar,
+        start_symbol="S",
+        padded_maximum_length=5,
+        n_variables=0,
+        device=torch.device("cpu"),
+        max_tries=10
+    )
+
+    with pytest.raises(RuntimeError, match="Could not produce a valid expression within the max_tries limit"):
+        pcfg.sample_string_expression(1)
 
 # --- Test comparing probabilities ---
 @pytest.mark.large
