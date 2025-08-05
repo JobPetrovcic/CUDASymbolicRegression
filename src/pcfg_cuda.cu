@@ -1,5 +1,6 @@
 #include "pcfg_kernels.h"
 #include "operators.h"
+#include "error_codes.h"
 #include <torch/torch.h>
 #include <cuda.h>
 #include <curand_kernel.h>
@@ -58,7 +59,7 @@ __global__ void pcfg_sample_string_expression_kernel(
                 }
                 if (chosen_rule == INVALID_RULE)
                 {
-                    errors[b] = 10; // No valid rule found
+                    errors[b] = static_cast<int64_t>(ErrorCode::GENERATION_NO_VALID_RULE_FOUND); // No valid rule found
                     break;
                 }
 
@@ -66,7 +67,7 @@ __global__ void pcfg_sample_string_expression_kernel(
                 int32_t rhs_end = rhs_ptr[chosen_rule + 1];
                 for (int32_t i = rhs_end - 1; i >= rhs_start; --i)
                 {
-                    if (stack_ptr >= max_length)
+                    if (stack_ptr >= HARD_MAX_LENGTH)
                     {
                         should_restart = true; // Expression too long
                         break;
@@ -105,13 +106,14 @@ __global__ void pcfg_sample_string_expression_kernel(
                 output[b][i] = NO_OP; // padding
             }
             generated_successfully = true;
+            errors[b] = static_cast<int64_t>(ErrorCode::NO_ERROR);
             break;
         }
     }
 
-    if (!generated_successfully)
+    if (!generated_successfully && errors[b] == 0)
     {
-        errors[b] = 9; // Using a new error code to avoid conflict
+        errors[b] = static_cast<int64_t>(ErrorCode::GENERATION_MAX_TRIES_EXCEEDED); // Using a new error code to avoid conflict
     }
 }
 
@@ -180,7 +182,7 @@ __global__ void parse_to_prefix_kernel(
         { // Terminal
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1; // Postfix expression too long
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                 return;
             }
             out_queue[out_queue_size++] = token;
@@ -189,7 +191,7 @@ __global__ void parse_to_prefix_kernel(
         {
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2; // Operator stack overflow
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -200,14 +202,14 @@ __global__ void parse_to_prefix_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1; // Postfix expression too long
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr == 0)
             {
-                errors[b] = 3; // Mismatched parenthesis
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
                 return;
             }
             op_stack_ptr--; // Pop rparenthesis
@@ -220,14 +222,14 @@ __global__ void parse_to_prefix_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1; // Postfix expression too long
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2; // Operator stack overflow
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -238,12 +240,12 @@ __global__ void parse_to_prefix_kernel(
     {
         if (op_stack[op_stack_ptr - 1] == rparenthesis_id)
         {
-            errors[b] = 3; // Mismatched parenthesis
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
             return;
         }
         if (out_queue_size >= HARD_MAX_LENGTH)
         {
-            errors[b] = 1; // Postfix expression too long
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
             return;
         }
         out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -274,7 +276,7 @@ __global__ void parse_to_prefix_kernel(
         {
             if (child_stack_ptr < 1)
             {
-                errors[b] = 5; // Unary operator without operand
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND); // Unary operator without operand
                 return;
             }
             int32_t child_index = child_stack[--child_stack_ptr];
@@ -285,7 +287,7 @@ __global__ void parse_to_prefix_kernel(
         {
             if (child_stack_ptr < 2)
             {
-                errors[b] = 6; // Binary operator without enough operands
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS); // Binary operator without enough operands
                 return;
             }
             int32_t left_child_index = child_stack[--child_stack_ptr];
@@ -301,13 +303,13 @@ __global__ void parse_to_prefix_kernel(
         }
         if (child_stack_ptr >= HARD_MAX_LENGTH)
         {
-            errors[b] = 7; // Child stack overflow
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW); // Child stack overflow
             return;
         }
         child_stack[child_stack_ptr++] = i;
     }
-    if (out_queue_size > 0 && child_stack_ptr != 1)
-        errors[b] = 8; // Malformed expression (e.g., too many operands)
+    if (out_queue_size > 0 && child_stack_ptr != 1 && errors[b] == 0)
+        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION); // Malformed expression (e.g., too many operands)
 }
 
 void parse_to_prefix_cuda_impl(
@@ -363,7 +365,7 @@ __global__ void parse_to_postfix_kernel(
         { // Terminal
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1; // Postfix expression too long
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                 return;
             }
             out_queue[out_queue_size++] = token;
@@ -372,7 +374,7 @@ __global__ void parse_to_postfix_kernel(
         {
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2; // Operator stack overflow
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -383,14 +385,14 @@ __global__ void parse_to_postfix_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1; // Postfix expression too long
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr == 0)
             {
-                errors[b] = 3; // Mismatched parenthesis
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
                 return;
             }
             op_stack_ptr--; // Pop lparenthesis
@@ -403,14 +405,14 @@ __global__ void parse_to_postfix_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1; // Postfix expression too long
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2; // Operator stack overflow
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -421,12 +423,12 @@ __global__ void parse_to_postfix_kernel(
     {
         if (op_stack[op_stack_ptr - 1] == lparenthesis_id)
         {
-            errors[b] = 3; // Mismatched parenthesis
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
             return;
         }
         if (out_queue_size >= HARD_MAX_LENGTH)
         {
-            errors[b] = 1; // Postfix expression too long
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
             return;
         }
         out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -450,7 +452,7 @@ __global__ void parse_to_postfix_kernel(
         {
             if (child_stack_ptr < 1)
             {
-                errors[b] = 5; // Unary operator without operand
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND); // Unary operator without operand
                 return;
             }
             int32_t child_index = child_stack[--child_stack_ptr];
@@ -461,7 +463,7 @@ __global__ void parse_to_postfix_kernel(
         {
             if (child_stack_ptr < 2)
             {
-                errors[b] = 6; // Binary operator without enough operands
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS); // Binary operator without enough operands
                 return;
             }
             int32_t right_child_index = child_stack[--child_stack_ptr];
@@ -477,13 +479,13 @@ __global__ void parse_to_postfix_kernel(
         }
         if (child_stack_ptr >= HARD_MAX_LENGTH)
         {
-            errors[b] = 7; // Child stack overflow
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW); // Child stack overflow
             return;
         }
         child_stack[child_stack_ptr++] = i;
     }
-    if (out_queue_size > 0 && child_stack_ptr != 1)
-        errors[b] = 8; // Malformed expression (e.g., too many operands)
+    if (out_queue_size > 0 && child_stack_ptr != 1 && errors[b] == 0)
+        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION); // Malformed expression (e.g., too many operands)
 }
 
 __global__ void parse_to_prefix_parent_kernel(
@@ -517,7 +519,7 @@ __global__ void parse_to_prefix_parent_kernel(
         { // Terminal
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                 return;
             }
             out_queue[out_queue_size++] = token;
@@ -526,7 +528,7 @@ __global__ void parse_to_prefix_parent_kernel(
         {
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -537,14 +539,14 @@ __global__ void parse_to_prefix_parent_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr == 0)
             {
-                errors[b] = 3;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
                 return;
             }
             op_stack_ptr--; // Pop rparenthesis
@@ -557,14 +559,14 @@ __global__ void parse_to_prefix_parent_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -574,12 +576,12 @@ __global__ void parse_to_prefix_parent_kernel(
     {
         if (op_stack[op_stack_ptr - 1] == rparenthesis_id)
         {
-            errors[b] = 3;
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
             return;
         }
         if (out_queue_size >= HARD_MAX_LENGTH)
         {
-            errors[b] = 1;
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
             return;
         }
         out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -620,7 +622,7 @@ __global__ void parse_to_prefix_parent_kernel(
         {
             if (node_stack_ptr < 1)
             {
-                errors[b] = 5;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND);
                 return;
             }
             int32_t child_index = node_stack[--node_stack_ptr];
@@ -630,7 +632,7 @@ __global__ void parse_to_prefix_parent_kernel(
         {
             if (node_stack_ptr < 2)
             {
-                errors[b] = 6;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS);
                 return;
             }
             int32_t child1_index = node_stack[--node_stack_ptr];
@@ -640,14 +642,14 @@ __global__ void parse_to_prefix_parent_kernel(
         }
         if (node_stack_ptr >= HARD_MAX_LENGTH)
         {
-            errors[b] = 7;
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW);
             return;
         }
         node_stack[node_stack_ptr++] = i;
     }
     if (out_queue_size > 0 && node_stack_ptr != 1)
     {
-        errors[b] = 8;
+        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION);
     }
 }
 void parse_to_prefix_parent_cuda_impl(
@@ -728,7 +730,7 @@ __global__ void parse_to_postfix_parent_kernel(
         { // Terminal
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                 return;
             }
             out_queue[out_queue_size++] = token;
@@ -737,7 +739,7 @@ __global__ void parse_to_postfix_parent_kernel(
         {
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -748,14 +750,14 @@ __global__ void parse_to_postfix_parent_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr == 0)
             {
-                errors[b] = 3;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
                 return;
             }
             op_stack_ptr--; // Pop lparenthesis
@@ -768,14 +770,14 @@ __global__ void parse_to_postfix_parent_kernel(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                     return;
                 }
                 out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
             }
             if (op_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 2;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                 return;
             }
             op_stack[op_stack_ptr++] = token;
@@ -786,12 +788,12 @@ __global__ void parse_to_postfix_parent_kernel(
     {
         if (op_stack[op_stack_ptr - 1] == lparenthesis_id)
         {
-            errors[b] = 3;
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
             return;
         }
         if (out_queue_size >= HARD_MAX_LENGTH)
         {
-            errors[b] = 1;
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
             return;
         }
         out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -831,7 +833,7 @@ __global__ void parse_to_postfix_parent_kernel(
         {
             if (node_stack_ptr < 1)
             {
-                errors[b] = 5;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND);
                 return;
             }
             int32_t child_index = node_stack[--node_stack_ptr];
@@ -841,7 +843,7 @@ __global__ void parse_to_postfix_parent_kernel(
         {
             if (node_stack_ptr < 2)
             {
-                errors[b] = 6;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS);
                 return;
             }
             int32_t right_child_index = node_stack[--node_stack_ptr];
@@ -852,13 +854,13 @@ __global__ void parse_to_postfix_parent_kernel(
 
         if (node_stack_ptr >= HARD_MAX_LENGTH)
         {
-            errors[b] = 7;
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW);
             return;
         }
         node_stack[node_stack_ptr++] = i;
     }
-    if (out_queue_size > 0 && node_stack_ptr != 1)
-        errors[b] = 8; // Malformed expression
+    if (out_queue_size > 0 && node_stack_ptr != 1 && errors[b] == 0)
+        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION); // Malformed expression
 }
 
 void parse_to_postfix_parent_cuda_impl(
@@ -920,7 +922,7 @@ __global__ void postfix_to_infix_kernel(
         { // Operand
             if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
             {
-                errors_acc[b] = 2;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                 break;
             }
             stack_starts[stack_ptr] = workspace_ptr;
@@ -932,7 +934,7 @@ __global__ void postfix_to_infix_kernel(
         { // Unary operator
             if (stack_ptr < 1)
             {
-                errors_acc[b] = 5;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
                 break;
             }
             stack_ptr--;
@@ -944,7 +946,7 @@ __global__ void postfix_to_infix_kernel(
             {
                 if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
-                    errors_acc[b] = 2;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                     break;
                 }
 
@@ -961,7 +963,7 @@ __global__ void postfix_to_infix_kernel(
             { // Postfix style: (operand)^2
                 if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
-                    errors_acc[b] = 2;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                     break;
                 }
                 stack_starts[stack_ptr] = workspace_ptr;
@@ -978,7 +980,7 @@ __global__ void postfix_to_infix_kernel(
         { // Binary operator
             if (stack_ptr < 2)
             {
-                errors_acc[b] = 6;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
                 break;
             }
             stack_ptr--;
@@ -990,7 +992,7 @@ __global__ void postfix_to_infix_kernel(
 
             if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH * 2)
             {
-                errors_acc[b] = 2;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                 break;
             }
             stack_starts[stack_ptr] = workspace_ptr;
@@ -1010,14 +1012,14 @@ __global__ void postfix_to_infix_kernel(
     {
         if (stack_ptr != 1)
         {
-            errors_acc[b] = 8;
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
         }
         else
         {
             int32_t final_len = stack_lens[0];
             if (final_len > M_infix)
             {
-                errors_acc[b] = 1;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
             }
             else
             {
@@ -1084,7 +1086,7 @@ __global__ void prefix_to_infix_kernel(
         { // Operand
             if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
             {
-                errors_acc[b] = 2;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                 break;
             }
             stack_starts[stack_ptr] = workspace_ptr;
@@ -1096,7 +1098,7 @@ __global__ void prefix_to_infix_kernel(
         { // Unary operator
             if (stack_ptr < 1)
             {
-                errors_acc[b] = 5;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
                 break;
             }
             stack_ptr--;
@@ -1108,7 +1110,7 @@ __global__ void prefix_to_infix_kernel(
             {
                 if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
-                    errors_acc[b] = 2;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                     break;
                 }
                 stack_starts[stack_ptr] = workspace_ptr;
@@ -1123,7 +1125,7 @@ __global__ void prefix_to_infix_kernel(
             { // Postfix style: (operand)^2
                 if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
                 {
-                    errors_acc[b] = 2;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                     break;
                 }
                 stack_starts[stack_ptr] = workspace_ptr;
@@ -1140,7 +1142,7 @@ __global__ void prefix_to_infix_kernel(
         { // Binary operator
             if (stack_ptr < 2)
             {
-                errors_acc[b] = 6;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
                 break;
             }
             // Note the order of popping for prefix is reversed from postfix
@@ -1153,7 +1155,7 @@ __global__ void prefix_to_infix_kernel(
 
             if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH * 2)
             {
-                errors_acc[b] = 2;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
                 break;
             }
             stack_starts[stack_ptr] = workspace_ptr;
@@ -1173,14 +1175,14 @@ __global__ void prefix_to_infix_kernel(
     {
         if (stack_ptr != 1)
         {
-            errors_acc[b] = 8;
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
         }
         else
         {
             int32_t final_len = stack_lens[0];
             if (final_len > M_infix)
             {
-                errors_acc[b] = 1;
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
             }
             else
             {

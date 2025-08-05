@@ -1,5 +1,6 @@
 #include "evaluation_kernels.h"
 #include "operators.h"
+#include "error_codes.h"
 #include <omp.h>  // For CPU parallelization
 #include <atomic> // For std::atomic_exchange
 
@@ -35,7 +36,7 @@ void validate_inputs_cpu_impl(
                     if (child_k >= m)
                     {
                         // Atomically set the error flag
-                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 1);
+                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::VALIDATION_CHILD_INDEX_GEQ_PARENT));
                         goto next_iter;
                     }
                 }
@@ -43,7 +44,7 @@ void validate_inputs_cpu_impl(
             if (actual_arity != expected_arity)
             {
                 // Atomically set the error flag
-                std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 1);
+                std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::VALIDATION_ARITY_MISMATCH));
             }
         next_iter:;
         }
@@ -199,7 +200,7 @@ void evaluation_backward_step_k_cpu_impl(
                 if (g_in == static_cast<scalar_t>(0.0))
                     continue;
                 // g_in should be 0 for NO_OP. If it's not, it's an error.
-                std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 2); // Error code 2 for gradient on NO_OP
+                std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_GRAD_ON_NO_OP)); // Error code 2 for gradient on NO_OP
                 continue;
             }
 
@@ -256,7 +257,7 @@ void evaluation_backward_step_k_cpu_impl(
                 scalar_t g_out0;
                 if (arg0 <= static_cast<scalar_t>(0.0))
                 {
-                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 3); // Error code 3 for gradient on invalid log
+                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE)); // Error code 3 for gradient on invalid log
                     g_out0 = static_cast<scalar_t>(0.0);
                 }
                 else
@@ -288,7 +289,7 @@ void evaluation_backward_step_k_cpu_impl(
 
                 //                if (arg0 <= static_cast<scalar_t>(0.0))
                 //                {
-                //                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 4); // Error code 4 for gradient on invalid sqrt
+                //                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_SQRT_AT_NEGATIVE)); // Error code 4 for gradient on invalid sqrt
                 //                    g_out0 = static_cast<scalar_t>(0.0);
                 //                }
                 //                else
@@ -361,7 +362,7 @@ void evaluation_backward_step_k_cpu_impl(
                 scalar_t g_out0, g_out1;
                 if (arg1 == static_cast<scalar_t>(0.0))
                 {
-                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 5); // Error code 5 for gradient on invalid div
+                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_DIV_BY_ZERO)); // Error code 5 for gradient on invalid div
                     g_out0 = static_cast<scalar_t>(0.0);
                     g_out1 = static_cast<scalar_t>(0.0);
                 }
@@ -630,7 +631,7 @@ void evaluation_multiple_backward_step_k_cpu_impl(
                 if (op == NO_OP)
                 {
                     if (g_in != static_cast<scalar_t>(0.0))
-                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 2);
+                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_GRAD_ON_NO_OP));
                     continue;
                 }
 
@@ -684,7 +685,7 @@ void evaluation_multiple_backward_step_k_cpu_impl(
                     scalar_t g_out0;
                     if (arg0 <= 0)
                     {
-                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 3);
+                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE));
                         g_out0 = static_cast<scalar_t>(0.0);
                     }
                     else
@@ -777,7 +778,7 @@ void evaluation_multiple_backward_step_k_cpu_impl(
                     scalar_t g_out0, g_out1;
                     if (arg1 == 0)
                     {
-                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), 5);
+                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_DIV_BY_ZERO));
                         g_out0 = static_cast<scalar_t>(0.0);
                         g_out1 = static_cast<scalar_t>(0.0);
                     }

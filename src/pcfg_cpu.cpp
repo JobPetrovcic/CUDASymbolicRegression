@@ -1,5 +1,6 @@
 #include "pcfg_kernels.h"
 #include "operators.h"
+#include "error_codes.h"
 #include <torch/torch.h>
 #include <random>
 #include <omp.h>
@@ -56,15 +57,15 @@ void pcfg_sample_string_expression_cpu_impl(
 
                     if (chosen_rule == INVALID_RULE)
                     {
-                        errors[b] = 10; // No valid rule found
-                        break;          // Stop processing this batch item
+                        errors[b] = static_cast<int64_t>(ErrorCode::GENERATION_NO_VALID_RULE_FOUND); // No valid rule found
+                        break;                                                                       // Stop processing this batch item
                     }
 
                     int32_t rhs_start = rhs_ptr[chosen_rule];
                     int32_t rhs_end = rhs_ptr[chosen_rule + 1];
                     for (int32_t i = rhs_end - 1; i >= rhs_start; --i)
                     {
-                        if (stack_ptr >= max_length)
+                        if (stack_ptr >= HARD_MAX_LENGTH) // Use HARD_MAX_LENGTH for stack capacity
                         {
                             should_restart = true;
                             break;
@@ -102,12 +103,13 @@ void pcfg_sample_string_expression_cpu_impl(
                     output[b][i] = NO_OP; // padding
                 }
                 generated_successfully = true;
+                errors[b] = static_cast<int64_t>(ErrorCode::NO_ERROR);
                 break;
             }
         }
-        if (!generated_successfully)
+        if (!generated_successfully && errors[b] == 0)
         {
-            errors[b] = 9;
+            errors[b] = static_cast<int64_t>(ErrorCode::GENERATION_MAX_TRIES_EXCEEDED);
         }
     }
 }
@@ -144,7 +146,7 @@ void parse_to_prefix_cpu_impl(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1; // Postfix expression too long
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                     break;
                 }
                 out_queue[out_queue_size++] = token;
@@ -153,7 +155,7 @@ void parse_to_prefix_cpu_impl(
             {
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2; // Operator stack overflow
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -164,14 +166,14 @@ void parse_to_prefix_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1; // Postfix expression too long
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr == 0)
                 {
-                    errors[b] = 3; // Mismatched parenthesis
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
                     break;
                 }
                 op_stack_ptr--; // Pop rparenthesis
@@ -183,14 +185,14 @@ void parse_to_prefix_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1; // Postfix expression too long
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2; // Operator stack overflow
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -207,12 +209,12 @@ void parse_to_prefix_cpu_impl(
         {
             if (op_stack[op_stack_ptr - 1] == rparenthesis_id)
             {
-                errors[b] = 3; // Mismatched parenthesis
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
                 break;
             }
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1; // Postfix expression too long
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                 break;
             }
             out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -246,7 +248,7 @@ void parse_to_prefix_cpu_impl(
             {
                 if (child_stack_ptr < 1)
                 {
-                    errors[b] = 5; // Unary operator without operand
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND); // Unary operator without operand
                     break;
                 }
                 int32_t child_index = child_stack[--child_stack_ptr];
@@ -257,7 +259,7 @@ void parse_to_prefix_cpu_impl(
             {
                 if (child_stack_ptr < 2)
                 {
-                    errors[b] = 6; // Binary operator without enough operands
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS); // Binary operator without enough operands
                     break;
                 }
                 int32_t left_child_index = child_stack[--child_stack_ptr];
@@ -273,13 +275,13 @@ void parse_to_prefix_cpu_impl(
             }
             if (child_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 7; // Child stack overflow
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW); // Child stack overflow
                 break;
             }
             child_stack[child_stack_ptr++] = i;
         }
-        if (out_queue_size > 0 && child_stack_ptr != 1)
-            errors[b] = 8; // Malformed expression (e.g., too many operands)
+        if (out_queue_size > 0 && child_stack_ptr != 1 && errors[b] == 0)
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION); // Malformed expression (e.g., too many operands)
     }
 }
 
@@ -315,7 +317,7 @@ void parse_to_prefix_parent_cpu_impl(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                     break;
                 }
                 out_queue[out_queue_size++] = token;
@@ -324,7 +326,7 @@ void parse_to_prefix_parent_cpu_impl(
             {
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -335,14 +337,14 @@ void parse_to_prefix_parent_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1;
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr == 0)
                 {
-                    errors[b] = 3;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
                     break;
                 }
                 op_stack_ptr--;
@@ -355,14 +357,14 @@ void parse_to_prefix_parent_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1;
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -377,12 +379,12 @@ void parse_to_prefix_parent_cpu_impl(
         {
             if (op_stack[op_stack_ptr - 1] == rparenthesis_id)
             {
-                errors[b] = 3;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
                 break;
             }
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                 break;
             }
             out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -427,7 +429,7 @@ void parse_to_prefix_parent_cpu_impl(
             {
                 if (node_stack_ptr < 1)
                 {
-                    errors[b] = 5;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND);
                     break;
                 }
                 int32_t child_index = node_stack[--node_stack_ptr];
@@ -437,7 +439,7 @@ void parse_to_prefix_parent_cpu_impl(
             {
                 if (node_stack_ptr < 2)
                 {
-                    errors[b] = 6;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS);
                     break;
                 }
                 int32_t child1_index = node_stack[--node_stack_ptr];
@@ -447,7 +449,7 @@ void parse_to_prefix_parent_cpu_impl(
             }
             if (node_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 7;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW);
                 break;
             }
             node_stack[node_stack_ptr++] = i;
@@ -457,7 +459,7 @@ void parse_to_prefix_parent_cpu_impl(
 
         if (out_queue_size > 0 && node_stack_ptr != 1)
         {
-            errors[b] = 8;
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION);
         }
     }
 }
@@ -488,7 +490,7 @@ void parse_to_postfix_cpu_impl(
             {
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1; // Postfix expression too long
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                     break;
                 }
                 out_queue[out_queue_size++] = token;
@@ -497,7 +499,7 @@ void parse_to_postfix_cpu_impl(
             {
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2; // Operator stack overflow
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -508,14 +510,14 @@ void parse_to_postfix_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1; // Postfix expression too long
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr == 0)
                 {
-                    errors[b] = 3; // Mismatched parenthesis
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
                     break;
                 }
                 op_stack_ptr--; // Pop lparenthesis
@@ -528,14 +530,14 @@ void parse_to_postfix_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1; // Postfix expression too long
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2; // Operator stack overflow
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW); // Operator stack overflow
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -552,12 +554,12 @@ void parse_to_postfix_cpu_impl(
         {
             if (op_stack[op_stack_ptr - 1] == lparenthesis_id)
             {
-                errors[b] = 3; // Mismatched parenthesis
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS); // Mismatched parenthesis
                 break;
             }
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1; // Postfix expression too long
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW); // Postfix expression too long
                 break;
             }
             out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -584,7 +586,7 @@ void parse_to_postfix_cpu_impl(
             {
                 if (child_stack_ptr < 1)
                 {
-                    errors[b] = 5; // Unary operator without operand
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND); // Unary operator without operand
                     break;
                 }
                 int32_t child_index = child_stack[--child_stack_ptr];
@@ -595,7 +597,7 @@ void parse_to_postfix_cpu_impl(
             {
                 if (child_stack_ptr < 2)
                 {
-                    errors[b] = 6; // Binary operator without enough operands
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS); // Binary operator without enough operands
                     break;
                 }
                 int32_t right_child_index = child_stack[--child_stack_ptr];
@@ -611,13 +613,13 @@ void parse_to_postfix_cpu_impl(
             }
             if (child_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 7; // Child stack overflow
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW); // Child stack overflow
                 break;
             }
             child_stack[child_stack_ptr++] = i;
         }
-        if (out_queue_size > 0 && child_stack_ptr != 1)
-            errors[b] = 8; // Malformed expression (e.g., too many operands)
+        if (out_queue_size > 0 && child_stack_ptr != 1 && errors[b] == 0)
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION); // Malformed expression (e.g., too many operands)
     }
 }
 
@@ -647,7 +649,7 @@ void parse_to_postfix_parent_cpu_impl(
             { // Terminal
                 if (out_queue_size >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 1;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                     break;
                 }
                 out_queue[out_queue_size++] = token;
@@ -656,7 +658,7 @@ void parse_to_postfix_parent_cpu_impl(
             {
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -667,14 +669,14 @@ void parse_to_postfix_parent_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1;
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr == 0)
                 {
-                    errors[b] = 3;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
                     break;
                 }
                 op_stack_ptr--; // Pop lparenthesis
@@ -687,14 +689,14 @@ void parse_to_postfix_parent_cpu_impl(
                 {
                     if (out_queue_size >= HARD_MAX_LENGTH)
                     {
-                        errors[b] = 1;
+                        errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                         break;
                     }
                     out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
                 }
                 if (op_stack_ptr >= HARD_MAX_LENGTH)
                 {
-                    errors[b] = 2;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OPERATOR_STACK_OVERFLOW);
                     break;
                 }
                 op_stack[op_stack_ptr++] = token;
@@ -709,12 +711,12 @@ void parse_to_postfix_parent_cpu_impl(
         {
             if (op_stack[op_stack_ptr - 1] == lparenthesis_id)
             {
-                errors[b] = 3;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_MISMATCHED_PARENTHESIS);
                 break;
             }
             if (out_queue_size >= HARD_MAX_LENGTH)
             {
-                errors[b] = 1;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_OUTPUT_QUEUE_OVERFLOW);
                 break;
             }
             out_queue[out_queue_size++] = op_stack[--op_stack_ptr];
@@ -753,7 +755,7 @@ void parse_to_postfix_parent_cpu_impl(
             {
                 if (node_stack_ptr < 1)
                 {
-                    errors[b] = 5;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND);
                     break;
                 }
                 int32_t child_index = node_stack[--node_stack_ptr];
@@ -763,7 +765,7 @@ void parse_to_postfix_parent_cpu_impl(
             {
                 if (node_stack_ptr < 2)
                 {
-                    errors[b] = 6;
+                    errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS);
                     break;
                 }
                 int32_t right_child_index = node_stack[--node_stack_ptr];
@@ -773,7 +775,7 @@ void parse_to_postfix_parent_cpu_impl(
             }
             if (node_stack_ptr >= HARD_MAX_LENGTH)
             {
-                errors[b] = 7;
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW);
                 break;
             }
             node_stack[node_stack_ptr++] = i;
@@ -783,7 +785,7 @@ void parse_to_postfix_parent_cpu_impl(
 
         if (out_queue_size > 0 && node_stack_ptr != 1)
         {
-            errors[b] = 8; // Malformed expression
+            errors[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION); // Malformed expression
         }
     }
 }
@@ -817,7 +819,7 @@ void postfix_to_infix_cpu_impl(
             { // Unary operator
                 if (s.empty())
                 {
-                    errors_acc[b] = 5;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
                     break;
                 }
                 auto operand = s.top();
@@ -844,7 +846,7 @@ void postfix_to_infix_cpu_impl(
             { // Binary operator
                 if (s.size() < 2)
                 {
-                    errors_acc[b] = 6;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
                     break;
                 }
                 auto op2 = s.top();
@@ -866,14 +868,14 @@ void postfix_to_infix_cpu_impl(
         {
             if (s.size() != 1)
             {
-                errors_acc[b] = 8; // Malformed expression
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION); // Malformed expression
             }
             else
             {
                 auto final_expr = s.top();
                 if (final_expr.size() > M_infix)
                 {
-                    errors_acc[b] = 1; // Infix expression too long
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG); // Infix expression too long
                 }
                 else
                 {
@@ -919,7 +921,7 @@ void prefix_to_infix_cpu_impl(
             { // Unary operator
                 if (s.empty())
                 {
-                    errors_acc[b] = 5;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
                     break;
                 }
                 auto operand = s.top();
@@ -946,7 +948,7 @@ void prefix_to_infix_cpu_impl(
             { // Binary operator
                 if (s.size() < 2)
                 {
-                    errors_acc[b] = 6;
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
                     break;
                 }
                 auto op1 = s.top();
@@ -968,14 +970,14 @@ void prefix_to_infix_cpu_impl(
         {
             if (s.size() != 1)
             {
-                errors_acc[b] = 8; // Malformed expression
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION); // Malformed expression
             }
             else
             {
                 auto final_expr = s.top();
                 if (final_expr.size() > M_infix)
                 {
-                    errors_acc[b] = 1; // Infix expression too long
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG); // Infix expression too long
                 }
                 else
                 {

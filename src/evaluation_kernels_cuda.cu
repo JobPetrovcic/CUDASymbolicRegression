@@ -1,5 +1,6 @@
 #include "evaluation_kernels.h"
 #include "operators.h"
+#include "error_codes.h"
 #include <ATen/native/cuda/Loops.cuh>
 #include <ATen/cuda/Atomic.cuh>
 
@@ -35,7 +36,7 @@ __global__ void validate_inputs_kernel(
             actual_arity++;
             if (child_k >= m)
             {
-                atomicCAS(error_flag_ptr, 0, 1);
+                atomicCAS(error_flag_ptr, 0, static_cast<int32_t>(ErrorCode::VALIDATION_CHILD_INDEX_GEQ_PARENT));
                 return;
             }
         }
@@ -43,7 +44,7 @@ __global__ void validate_inputs_kernel(
 
     if (actual_arity != expected_arity)
     {
-        atomicCAS(error_flag_ptr, 0, 1);
+        atomicCAS(error_flag_ptr, 0, static_cast<int32_t>(ErrorCode::VALIDATION_ARITY_MISMATCH));
     }
 }
 
@@ -203,7 +204,7 @@ __global__ void evaluation_backward_step_k_kernel(
             return;
         // If we have a non-zero gradient for a NO_OP, this is an error.
         // The forward pass should produce a zero, so the gradient should be zero unless there's a bug.
-        atomicExch(error_flag_ptr, 2);
+        atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_GRAD_ON_NO_OP));
         return;
     }
 
@@ -257,7 +258,7 @@ __global__ void evaluation_backward_step_k_kernel(
         scalar_t g_out0;
         if (arg0 <= static_cast<scalar_t>(0.0))
         {
-            atomicExch(error_flag_ptr, 3); // Error code 3 for gradient on invalid log
+            atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE)); // Error code 3 for gradient on invalid log
             g_out0 = static_cast<scalar_t>(0.0);
         }
         else
@@ -313,7 +314,7 @@ __global__ void evaluation_backward_step_k_kernel(
         scalar_t g_out0, g_out1;
         if (arg1 == static_cast<scalar_t>(0.0))
         {
-            atomicExch(error_flag_ptr, 5); // Error code 5 for gradient on invalid div
+            atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_DIV_BY_ZERO)); // Error code 5 for gradient on invalid div
             g_out0 = static_cast<scalar_t>(0.0);
             g_out1 = static_cast<scalar_t>(0.0);
         }
@@ -374,7 +375,7 @@ __global__ void evaluation_backward_step_k_kernel(
         // if (g_in == static_cast<scalar_t>(0.0)) return;
         // if (arg0 <= static_cast<scalar_t>(0.0))
         //{
-        //     atomicExch(error_flag_ptr, 4); // Error code 4 for gradient on invalid sqrt
+        //     atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_SQRT_AT_NEGATIVE)); // Error code 4 for gradient on invalid sqrt
         //     g_out0 = static_cast<scalar_t>(0.0);
         // }
         // else
@@ -695,8 +696,6 @@ __global__ void evaluation_multiple_backward_step_k_kernel(
         return;
 
     int64_t op = ops_acc[k][b_global];
-    if (op == NO_OP)
-        return;
 
     // Handle variables separately by summing gradients across all constant lanes (K) first
     if (op >= VAR_START_ID && op < VAR_START_ID + n_x)
@@ -716,6 +715,15 @@ __global__ void evaluation_multiple_backward_step_k_kernel(
     for (size_t const_idx = 0; const_idx < K; ++const_idx)
     {
         scalar_t g_in = grad_cache_acc[k][n_global][b_global][const_idx];
+
+        if (op == NO_OP)
+        {
+            if (g_in != static_cast<scalar_t>(0.0))
+            {
+                atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_GRAD_ON_NO_OP));
+            }
+            continue;
+        }
 
         switch (op)
         {
@@ -760,7 +768,7 @@ __global__ void evaluation_multiple_backward_step_k_kernel(
             scalar_t g_out0;
             if (arg0 <= 0)
             {
-                atomicExch(error_flag_ptr, 3);
+                atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE));
                 g_out0 = static_cast<scalar_t>(0.0);
             }
             else
@@ -841,7 +849,7 @@ __global__ void evaluation_multiple_backward_step_k_kernel(
             scalar_t g_out0, g_out1;
             if (arg1 == 0)
             {
-                atomicExch(error_flag_ptr, 5);
+                atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_DIV_BY_ZERO));
                 g_out0 = static_cast<scalar_t>(0.0);
                 g_out1 = static_cast<scalar_t>(0.0);
             }
