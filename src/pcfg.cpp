@@ -931,5 +931,6 @@ void init_pcfg(pybind11::module &m)
         .def("get_symbol_id", &ProbabilisticContextFreeGrammar::get_symbol_id, "Get the ID of a symbol",
              pybind11::arg("symbol"))
         .def_readonly("n_operators", &ProbabilisticContextFreeGrammar::n_operators, "Get the number of operators in the grammar")
-        .def("get_arities", &ProbabilisticContextFreeGrammar::get_arities, "Get the arities of the operators in the grammar");
+        .def("get_arities", &ProbabilisticContextFreeGrammar::get_arities, "Get the arities of the operators in the grammar")
+        .def("valid_ops", &ProbabilisticContextFreeGrammar::valid_ops, "Check if the operators in the grammar are valid");
 }

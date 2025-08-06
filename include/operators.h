@@ -47,6 +47,42 @@ constexpr size_t MAX_VARS = 30; // Max number of X variables
 
 constexpr int64_t NULL_CHILD = -1;
 
+C10_HOST_DEVICE inline bool is_valid_op(int op, int64_t n_variables)
+{
+    switch (op)
+    {
+    case NO_OP:
+        return false;
+    case LEARNABLE_CONSTANT:
+    case CONST_1:
+    case CONST_2:
+    case CONST_3:
+    case CONST_4:
+    case CONST_5:
+    case PI:
+    case E:
+    case SIN:
+    case COS:
+    case EXP:
+    case LOG:
+    case SQUARE:
+    case SQRT:
+    case ADD:
+    case SUB:
+    case MUL:
+    case DIV:
+    case POW:
+        return true;
+    default:
+        // Check if it's a variable
+        if (op >= VAR_START_ID && op < VAR_START_ID + n_variables)
+        {
+            return true;
+        }
+        return false;
+    }
+}
+
 C10_HOST_DEVICE inline int get_arity(int op)
 {
     if (op >= SIN && op <= SQRT)

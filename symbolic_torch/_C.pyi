@@ -115,6 +115,16 @@ class ProbabilisticContextFreeGrammar:
         ...
     def get_arities(self) -> torch.Tensor:
         ...
+    def valid_ops(self) -> torch.Tensor:
+        """
+        Returns a tensor indicating which operators are valid based on the number of variables.
+        """
+        ...
 
 def get_arity(op: Operator) -> int:
+    ...
+def is_valid_op(op: int, n_variables: int) -> bool:
+    """
+    Check if the operator is valid based on the number of variables.
+    """
     ...

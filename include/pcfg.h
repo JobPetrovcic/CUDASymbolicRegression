@@ -78,6 +78,15 @@ public:
         }
         return arities;
     }
+    torch::Tensor valid_ops() const
+    {
+        torch::Tensor valid_ops = torch::zeros({this->n_operators}, torch::kBool).to(device);
+        for (int64_t i = 0; i < this->n_operators; ++i)
+        {
+            valid_ops[i] = is_valid_op(i, this->n_variables);
+        }
+        return valid_ops;
+    }
 
 private:
     int64_t terminal_limit;
