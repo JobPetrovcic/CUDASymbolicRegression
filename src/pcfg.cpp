@@ -472,6 +472,7 @@ void ProbabilisticContextFreeGrammar::process_parsing_errors(const torch::Tensor
             ss << "Problem at Index: " << bad_idx << "\n";
             ss << "  Error: " << getErrorMessage(code) << "\n";
             ss << "  Input Expression: '" << expr_str_vec[0] << "'\n";
+            ss << "  Expression Tensor: " << single_expr_tensor << "\n";
         }
         if (num_errors > limit)
         {
