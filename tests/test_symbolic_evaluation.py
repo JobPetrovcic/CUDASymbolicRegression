@@ -11,6 +11,8 @@ import symbolic_torch
 from symbolic_torch.evaluation import evaluate_backend
 from symbolic_torch import Operator
 
+# TODO: test 1/0 is inf
+
 NULL_CHILD = -1
 
 unary_ops: List[int] = [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQUARE), int(Operator.SQRT)]
@@ -448,9 +450,9 @@ def test_gradients(device: str, op: int) -> None:
     B = ops_tensor.shape[-1]
 
     grad_output = torch.randn(N, B, dtype=torch.float32)
-    custom_x_grad, custom_c_grad = build_and_run_with_grad(x_tensor, ops_tensor, ch_tensor, c_tensor, grad_output, null_nan_output_grad=True, device=device, use_custom_kernel=True)
+    custom_x_grad, custom_c_grad = build_and_run_with_grad(x_tensor, ops_tensor, ch_tensor, c_tensor, grad_output, null_nan_output_grad=False, device=device, use_custom_kernel=True)
 
-    manual_x_grad, manual_c_grad = build_and_run_with_grad(x_tensor, ops_tensor, ch_tensor, c_tensor, grad_output, null_nan_output_grad=True, device=device, use_custom_kernel=False)
+    manual_x_grad, manual_c_grad = build_and_run_with_grad(x_tensor, ops_tensor, ch_tensor, c_tensor, grad_output, null_nan_output_grad=False, device=device, use_custom_kernel=False)
 
     assert custom_x_grad is not None and manual_x_grad is not None, "Gradients should not be None"
     assert torch.allclose(custom_x_grad, manual_x_grad, atol=1e-5, equal_nan=True)
@@ -587,7 +589,6 @@ def test_large_benchmark() -> None:
 # 10. Test error handling for gradients on invalid operations
 @pytest.mark.parametrize("op", [
     Operator.NO_OP,
-    Operator.LOG,
     Operator.DIV, 
 ])
 def test_gradient_on_invalid_op(op: int, device: str):
@@ -596,15 +597,16 @@ def test_gradient_on_invalid_op(op: int, device: str):
     
     grad_output = torch.ones(N, B, dtype=torch.float32)
 
-    if op == int(Operator.LOG):
-        # log(0)
-        ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.LOG)]], dtype=torch.int64).expand(-1, B)
-        ch_tensor = -torch.ones(2, B, 2, dtype=torch.int64)
-        ch_tensor[1, :, 0] = 0
-        x_tensor[0, 0] = 0
-        c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
-        expected_error = "Error during symbolic evaluation backward pass: Backward pass error: Gradient for log\(x\) where x <= 0\."
-    elif op == int(Operator.DIV):
+    # this behavior is inconsistent with pytorch, so we don't test it
+    #if op == int(Operator.LOG):
+    #    # log(0)
+    #    ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.LOG)]], dtype=torch.int64).expand(-1, B)
+    #    ch_tensor = -torch.ones(2, B, 2, dtype=torch.int64)
+    #    ch_tensor[1, :, 0] = 0
+    #    x_tensor[0, 0] = 0
+    #    c_tensor = torch.zeros_like(ops_tensor, dtype=torch.float32)
+    #    expected_error = r"Error during symbolic evaluation backward pass: Backward pass error: Gradient for log\(x\) where x <= 0\."
+    if op == int(Operator.DIV):
         # 1/0
         ops_tensor = torch.tensor([[int(Operator.CONST_1)], [int(Operator.VAR_START_ID)], [int(Operator.DIV)]], dtype=torch.int64).expand(-1, B)
         ch_tensor = -torch.ones(3, B, 2, dtype=torch.int64)

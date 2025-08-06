@@ -23,11 +23,11 @@ enum class ErrorCode : int64_t
 
     // --- Symbolic Evaluation Backward Pass Errors ---
     EVAL_BACKWARD_ERROR_START = 200,
-    EVAL_BACKWARD_GRAD_ON_NO_OP = 201,          // A non-zero gradient was passed to a NO_OP node.
-    EVAL_BACKWARD_LOG_AT_NON_POSITIVE = 202,    // Gradient for log(x) where x <= 0.
-    EVAL_BACKWARD_SQRT_AT_NEGATIVE = 203,       // Gradient for sqrt(x) where x < 0.
-    EVAL_BACKWARD_DIV_BY_ZERO = 204,            // Gradient for a/b where b = 0.
-    EVAL_BACKWARD_POW_WITH_NEGATIVE_BASE = 205, // Gradient for pow(a, b) where a < 0.
+    EVAL_BACKWARD_GRAD_ON_NO_OP = 201, // A non-zero gradient was passed to a NO_OP node.
+                                       // EVAL_BACKWARD_LOG_AT_NON_POSITIVE = 202, // Gradient for log(x) where x <= 0. // Not used in Pytorch, so commented out.
+                                       // EVAL_BACKWARD_SQRT_AT_NEGATIVE = 203,       // Gradient for sqrt(x) where x < 0. Not used in Pytorch.
+    EVAL_BACKWARD_DIV_BY_ZERO = 204,   // Gradient for a/b where b = 0.
+                                       // EVAL_BACKWARD_POW_WITH_NEGATIVE_BASE = 205, // Gradient for pow(a, b) where a < 0. Not used in Pytorch.
 
     // --- PCFG Generation/Sampling Errors (from pcfg_sample_string_expression) ---
     GENERATION_ERROR_START = 300,
@@ -86,18 +86,21 @@ inline std::string getErrorMessage(ErrorCode code, const std::string &context = 
     case ErrorCode::EVAL_BACKWARD_GRAD_ON_NO_OP:
         base_message = "Backward pass error: A non-zero gradient was passed to a NO_OP node.";
         break;
-    case ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE:
+    // Not used in Pytorch, so commented out.
+    /*case ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE:
         base_message = "Backward pass error: Gradient for log(x) where x <= 0.";
-        break;
-    case ErrorCode::EVAL_BACKWARD_SQRT_AT_NEGATIVE:
+        break;*/
+    // Not used in Pytorch, so commented out.
+    /*case ErrorCode::EVAL_BACKWARD_SQRT_AT_NEGATIVE:
         base_message = "Backward pass error: Gradient for sqrt(x) where x < 0.";
-        break;
+        break;*/
     case ErrorCode::EVAL_BACKWARD_DIV_BY_ZERO:
         base_message = "Backward pass error: Gradient for a/b where b = 0.";
         break;
-    case ErrorCode::EVAL_BACKWARD_POW_WITH_NEGATIVE_BASE:
+    // Not used in Pytorch, so commented out.
+    /*case ErrorCode::EVAL_BACKWARD_POW_WITH_NEGATIVE_BASE:
         base_message = "Backward pass error: Gradient for pow(a, b) where a < 0.";
-        break;
+        break;*/
 
     // --- PCFG Generation/Sampling ---
     case ErrorCode::GENERATION_STACK_OVERFLOW:

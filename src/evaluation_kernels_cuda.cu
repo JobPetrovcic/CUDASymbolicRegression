@@ -256,15 +256,17 @@ __global__ void evaluation_backward_step_k_kernel(
         int64_t ch0_idx = ch_acc[k][b_global][0];
         scalar_t arg0 = cache_acc[ch0_idx][n_global][b_global];
         scalar_t g_out0;
-        if (arg0 <= static_cast<scalar_t>(0.0))
-        {
-            atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE)); // Error code 3 for gradient on invalid log
-            g_out0 = static_cast<scalar_t>(0.0);
-        }
-        else
-        {
-            g_out0 = div_wrapper(g_in, arg0);
-        }
+        // This behaviour is not consistent with PyTorch so we comment it out
+        // if (arg0 <= static_cast<scalar_t>(0.0))
+        //{
+        //     atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE)); // Error code 3 for gradient on invalid log
+        //     g_out0 = static_cast<scalar_t>(0.0);
+        // }
+        // else
+        //{
+        //     g_out0 = div_wrapper(g_in, arg0);
+        // }
+        g_out0 = div_wrapper(g_in, arg0);
         gpuAtomicAdd(&grad_cache_acc[ch0_idx][n_global][b_global], g_out0);
         break;
     }
@@ -766,15 +768,17 @@ __global__ void evaluation_multiple_backward_step_k_kernel(
             int64_t ch0 = ch_acc[k][b_global][0];
             scalar_t arg0 = cache_acc[ch0][n_global][b_global][const_idx];
             scalar_t g_out0;
-            if (arg0 <= 0)
-            {
-                atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE));
-                g_out0 = static_cast<scalar_t>(0.0);
-            }
-            else
-            {
-                g_out0 = div_wrapper(g_in, arg0);
-            }
+            //  This behaviour is not consistent with PyTorch so we comment it out
+            // if (arg0 <= 0)
+            //{
+            //     atomicExch(error_flag_ptr, static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE));
+            //     g_out0 = static_cast<scalar_t>(0.0);
+            // }
+            // else
+            //{
+            //     g_out0 = div_wrapper(g_in, arg0);
+            // }
+            g_out0 = div_wrapper(g_in, arg0);
             gpuAtomicAdd(&grad_cache_acc[ch0][n_global][b_global][const_idx], g_out0);
             break;
         }

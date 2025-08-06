@@ -255,15 +255,18 @@ void evaluation_backward_step_k_cpu_impl(
                 scalar_t arg0 = cache_acc[ch0_idx][n][b];
 
                 scalar_t g_out0;
-                if (arg0 <= static_cast<scalar_t>(0.0))
-                {
-                    std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE)); // Error code 3 for gradient on invalid log
-                    g_out0 = static_cast<scalar_t>(0.0);
-                }
-                else
-                {
-                    g_out0 = div_wrapper(g_in, arg0);
-                }
+                // This behavior is not consistent with pytorch
+                // if (arg0 <= static_cast<scalar_t>(0.0))
+                //{
+                //     std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE)); // Error code 3 for gradient on invalid log
+                //     g_out0 = static_cast<scalar_t>(0.0);
+                // }
+                // else
+                //{
+                //     g_out0 = div_wrapper(g_in, arg0);
+                // }
+                g_out0 = div_wrapper(g_in, arg0);
+
 #pragma omp atomic
                 grad_cache_acc[ch0_idx][n][b] += g_out0;
                 break;
@@ -683,15 +686,18 @@ void evaluation_multiple_backward_step_k_cpu_impl(
                     int64_t ch0 = ch_acc[k][b][0];
                     scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
                     scalar_t g_out0;
-                    if (arg0 <= 0)
-                    {
-                        std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE));
-                        g_out0 = static_cast<scalar_t>(0.0);
-                    }
-                    else
-                    {
-                        g_out0 = div_wrapper(g_in, arg0);
-                    }
+                    // This behavior is not consistent with pytorch
+                    // if (arg0 <= 0)
+                    //{
+                    //     std::atomic_exchange(reinterpret_cast<std::atomic<int32_t> *>(error_flag_ptr), //static_cast<int32_t>(ErrorCode::EVAL_BACKWARD_LOG_AT_NON_POSITIVE));
+                    //     g_out0 = static_cast<scalar_t>(0.0);
+                    // }
+                    // else
+                    //{
+                    //     g_out0 = div_wrapper(g_in, arg0);
+                    // }
+                    g_out0 = div_wrapper(g_in, arg0);
+
 #pragma omp atomic
                     grad_cache_acc[ch0][n][b][const_idx] += g_out0;
                     break;
