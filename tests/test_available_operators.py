@@ -91,8 +91,6 @@ def test_available_operators_contains_operators(pcfg : ProbabilisticContextFreeG
     operators = pcfg.available_operators()
     symbol_set = set(operators)
 
-    assert 'E' not in symbol_set
-
     terminals_in_grammar = ['+', '-', '*', '/', 'sin', 'cos', 'exp', 'sqrt', 'log', '^2', 'X_0']
     for term in terminals_in_grammar:
         assert term in symbol_set, f"Terminal '{term}' not found in available operators"

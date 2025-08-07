@@ -157,11 +157,13 @@ C10_HOST_DEVICE inline bool is_functional_style(int64_t op_id)
     case LN:
     case LOG10:
     case NEG:
+        return true;
     case INV:
+    case SQUARE:
     case CUBE:
     case FOURTH:
     case FIFTH:
-        return true;
+        return false;
     default:
         return false;
     }

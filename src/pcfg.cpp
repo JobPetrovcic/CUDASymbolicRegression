@@ -132,26 +132,26 @@ void ProbabilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int6
     add_symbol("log10", LOG10);
     add_symbol("LOG10", LOG10);
 
+    add_symbol("u-", NEG);
     add_symbol("neg", NEG);
     add_symbol("NEG", NEG);
     add_symbol("minus", NEG);
-    add_symbol("-u", NEG);
 
+    add_symbol("^-1", INV);
     add_symbol("inv", INV);
     add_symbol("INV", INV);
-    add_symbol("^-1", INV);
 
+    add_symbol("^3", CUBE);
     add_symbol("cube", CUBE);
     add_symbol("CUBE", CUBE);
-    add_symbol("^3", CUBE);
 
+    add_symbol("^4", FOURTH);
     add_symbol("fourth", FOURTH);
     add_symbol("FOURTH", FOURTH);
-    add_symbol("^4", FOURTH);
 
+    add_symbol("^5", FIFTH);
     add_symbol("fifth", FIFTH);
     add_symbol("FIFTH", FIFTH);
-    add_symbol("^5", FIFTH);
 
     add_symbol("+", ADD);
 
@@ -966,10 +966,10 @@ std::vector<std::string> ProbabilisticContextFreeGrammar::available_operators() 
     std::vector<std::string> symbols;
     symbols.reserve(id_to_symbol.size());
 
-    for (const auto &pair : id_to_symbol)
+    for (const auto &pair : symbol_to_id)
     {
-        if (pair.first < this->n_operators)
-            symbols.push_back(pair.second);
+        if (pair.second < this->n_operators)
+            symbols.push_back(pair.first);
     }
 
     return symbols;
