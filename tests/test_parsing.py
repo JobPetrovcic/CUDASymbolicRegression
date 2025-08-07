@@ -4,6 +4,8 @@ from symbolic_torch import ProbabilisticContextFreeGrammar, Operator
 import time
 from typing import List
 
+from tests.utils import get_cuda_device_with_min_memory
+
 # NOTE: All tests should be parameterized with device=["cpu", "cuda"] to ensure both backends are tested.
 
 NULL_CHILD = -1
@@ -32,7 +34,12 @@ P -> ^2 [1.0]
 def pcfg(request: pytest.FixtureRequest):
     device = request.param
     if not torch.cuda.is_available() and device == "cuda":
-        pytest.skip("CUDA not available")
+        raise ValueError("CUDA is not available on this system.")
+    if device == "cpu":
+        device = "cpu"
+    else:
+        index = get_cuda_device_with_min_memory()
+        device = f"cuda:{index}"
     return ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device(device))
 
 
@@ -52,7 +59,7 @@ def test_parse_to_prefix_constant(pcfg: ProbabilisticContextFreeGrammar):
     assert torch.equal(children[:, 0], torch.tensor([[NULL_CHILD, NULL_CHILD]], dtype=torch.int64, device=pcfg.device))
 
 
-@pytest.mark.parametrize("op_id", [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQRT), int(Operator.SQUARE)])
+@pytest.mark.parametrize("op_id", [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQRT), int(Operator.SQUARE), int(Operator.TAN), int(Operator.ARCSIN), int(Operator.ARCCOS), int(Operator.ARCTAN), int(Operator.SINH), int(Operator.COSH), int(Operator.TANH), int(Operator.FLOOR), int(Operator.CEIL), int(Operator.LN), int(Operator.LOG10), int(Operator.NEG), int(Operator.INV), int(Operator.CUBE), int(Operator.FOURTH), int(Operator.FIFTH)])
 def test_parse_to_postfix_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
@@ -66,7 +73,7 @@ def test_parse_to_postfix_unary(op_id: int, pcfg: ProbabilisticContextFreeGramma
     assert torch.equal(children[:, :2], expected_children)
 
 
-@pytest.mark.parametrize("op_id", [Operator.SIN, Operator.COS, Operator.EXP, Operator.LOG, Operator.SQRT, Operator.SQUARE])
+@pytest.mark.parametrize("op_id", [Operator.SIN, Operator.COS, Operator.EXP, Operator.LOG, Operator.SQRT, Operator.SQUARE, Operator.TAN, Operator.ARCSIN, Operator.ARCCOS, Operator.ARCTAN, Operator.SINH, Operator.COSH, Operator.TANH, Operator.FLOOR, Operator.CEIL, Operator.LN, Operator.LOG10, Operator.NEG, Operator.INV, Operator.CUBE, Operator.FOURTH, Operator.FIFTH])
 def test_parse_to_prefix_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
@@ -468,13 +475,14 @@ def test_benchmark_parsing_cpu_vs_cuda():
     import time
 
     if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-
+        raise ValueError("CUDA is not available.")
+    
+    index = get_cuda_device_with_min_memory()
     N_BENCH_LOOPS = 10
 
     
     pcfg_cpu = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device("cpu"))
-    pcfg_cuda = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device("cuda"))
+    pcfg_cuda = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device(f"cuda:{index}"))
     LPAREN = pcfg_cpu.get_symbol_id('(')
     RPAREN = pcfg_cpu.get_symbol_id(')')
     
@@ -491,12 +499,12 @@ def test_benchmark_parsing_cpu_vs_cuda():
         expressions[i, :e.shape[1]] = e
 
     expressions_cpu = expressions.to("cpu")
-    expressions_cuda = expressions.to("cuda")
+    expressions_cuda = expressions.to(f"cuda:{index}")
 
     # Warmup
     pcfg_cpu.parse_to_postfix(expressions_cpu)
     pcfg_cuda.parse_to_postfix(expressions_cuda)
-    torch.cuda.synchronize()
+    torch.cuda.synchronize(device=f"cuda:{index}")
 
     # CPU benchmark
     start_time = time.time()
@@ -509,7 +517,7 @@ def test_benchmark_parsing_cpu_vs_cuda():
     start_time = time.time()
     for _ in range(N_BENCH_LOOPS):
         pcfg_cuda.parse_to_postfix(expressions_cuda)
-    torch.cuda.synchronize()
+    torch.cuda.synchronize(device=f"cuda:{index}")
     cuda_time = (time.time() - start_time) / N_BENCH_LOOPS
     print(f"CUDA parsing time: {cuda_time:.4f}s")
 
@@ -535,7 +543,7 @@ def test_parse_to_prefix_parent_constant(pcfg: ProbabilisticContextFreeGrammar):
     assert torch.equal(parents[:, 0], torch.tensor([NULL_PARENT], dtype=torch.int64, device=pcfg.device))
 
 
-@pytest.mark.parametrize("op_id", [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQRT), int(Operator.SQUARE)])
+@pytest.mark.parametrize("op_id", [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQRT), int(Operator.SQUARE), int(Operator.TAN), int(Operator.ARCSIN), int(Operator.ARCCOS), int(Operator.ARCTAN), int(Operator.SINH), int(Operator.COSH), int(Operator.TANH), int(Operator.FLOOR), int(Operator.CEIL), int(Operator.LN), int(Operator.LOG10), int(Operator.NEG), int(Operator.INV), int(Operator.CUBE), int(Operator.FOURTH), int(Operator.FIFTH)])
 def test_parse_to_postfix_parent_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
@@ -549,7 +557,7 @@ def test_parse_to_postfix_parent_unary(op_id: int, pcfg: ProbabilisticContextFre
     assert torch.equal(parents[:, :2], expected_parents)
 
 
-@pytest.mark.parametrize("op_id", [Operator.SIN, Operator.COS, Operator.EXP, Operator.LOG, Operator.SQRT, Operator.SQUARE])
+@pytest.mark.parametrize("op_id", [Operator.SIN, Operator.COS, Operator.EXP, Operator.LOG, Operator.SQRT, Operator.SQUARE, Operator.TAN, Operator.ARCSIN, Operator.ARCCOS, Operator.ARCTAN, Operator.SINH, Operator.COSH, Operator.TANH, Operator.FLOOR, Operator.CEIL, Operator.LN, Operator.LOG10, Operator.NEG, Operator.INV, Operator.CUBE, Operator.FOURTH, Operator.FIFTH])
 def test_parse_to_prefix_parent_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
@@ -682,12 +690,14 @@ def test_parse_to_prefix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
 @pytest.mark.large
 def test_benchmark_parsing_parent_cpu_vs_cuda():
     if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
+        raise ValueError("CUDA is not available.")
+
+    index = get_cuda_device_with_min_memory()
 
     N_BENCH_LOOPS = 10
     
     pcfg_cpu = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device("cpu"))
-    pcfg_cuda = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device("cuda"))
+    pcfg_cuda = ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device(f"cuda:{index}"))
     LPAREN = pcfg_cpu.get_symbol_id('(')
     RPAREN = pcfg_cpu.get_symbol_id(')')
     
@@ -702,12 +712,12 @@ def test_benchmark_parsing_parent_cpu_vs_cuda():
         expressions[i, :e.shape[1]] = e
 
     expressions_cpu = expressions.to("cpu")
-    expressions_cuda = expressions.to("cuda")
+    expressions_cuda = expressions.to(f"cuda:{index}")
 
     # Warmup
     pcfg_cpu.parse_to_postfix_parent(expressions_cpu)
     pcfg_cuda.parse_to_postfix_parent(expressions_cuda)
-    torch.cuda.synchronize()
+    torch.cuda.synchronize(device=f"cuda:{index}")
 
     # CPU benchmark
     start_time = time.time()
@@ -720,7 +730,7 @@ def test_benchmark_parsing_parent_cpu_vs_cuda():
     start_time = time.time()
     for _ in range(N_BENCH_LOOPS):
         pcfg_cuda.parse_to_postfix_parent(expressions_cuda)
-    torch.cuda.synchronize()
+    torch.cuda.synchronize(device=f"cuda:{index}")
     cuda_time = (time.time() - start_time) / N_BENCH_LOOPS
     print(f"CUDA parent parsing time: {cuda_time:.4f}s")
 

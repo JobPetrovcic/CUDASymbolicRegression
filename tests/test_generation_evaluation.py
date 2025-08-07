@@ -3,6 +3,7 @@ import pytest
 
 from symbolic_torch import ProbabilisticContextFreeGrammar, create_constants
 from symbolic_torch.evaluation import evaluate
+from tests.utils import get_cuda_device_with_min_memory
 
 test_grammar = """E -> E + F [0.2]
 E -> E - F [0.2]
@@ -24,7 +25,7 @@ P -> ^2 [1.0]
 """
 
 # Parametrize device to test both CPU and CUDA implementations
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cpu", f"cuda:{get_cuda_device_with_min_memory()}"])
 def test_generated_evalvation(device : str):
     n_variables = 2
     M = 128

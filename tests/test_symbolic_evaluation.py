@@ -10,12 +10,20 @@ import symbolic_torch
 
 from symbolic_torch.evaluation import evaluate_backend
 from symbolic_torch import Operator
+from .utils import get_cuda_device_with_min_memory
 
 # TODO: test 1/0 is inf
 
 NULL_CHILD = -1
 
-unary_ops: List[int] = [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQUARE), int(Operator.SQRT)]
+unary_ops: List[int] = [
+    int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), 
+    int(Operator.SQUARE), int(Operator.SQRT), int(Operator.TAN), int(Operator.ARCSIN), 
+    int(Operator.ARCCOS), int(Operator.ARCTAN), int(Operator.SINH), int(Operator.COSH), 
+    int(Operator.TANH), int(Operator.FLOOR), int(Operator.CEIL), int(Operator.LN), 
+    int(Operator.LOG10), int(Operator.NEG), int(Operator.INV), int(Operator.CUBE), 
+    int(Operator.FOURTH), int(Operator.FIFTH)
+]
 binary_ops: List[int] = [int(Operator.ADD), int(Operator.SUB), int(Operator.MUL), int(Operator.DIV), int(Operator.POW)]
 
 all_ops: List[int] = unary_ops + binary_ops
@@ -126,6 +134,38 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
                     res = arg0 * arg0
                 elif op == int(Operator.SQRT):
                     res = torch.sqrt(arg0)
+                elif op == int(Operator.TAN):
+                    res = torch.tan(arg0)
+                elif op == int(Operator.ARCSIN):
+                    res = torch.arcsin(arg0)
+                elif op == int(Operator.ARCCOS):
+                    res = torch.arccos(arg0)
+                elif op == int(Operator.ARCTAN):
+                    res = torch.arctan(arg0)
+                elif op == int(Operator.SINH):
+                    res = torch.sinh(arg0)
+                elif op == int(Operator.COSH):
+                    res = torch.cosh(arg0)
+                elif op == int(Operator.TANH):
+                    res = torch.tanh(arg0)
+                elif op == int(Operator.FLOOR):
+                    res = torch.floor(arg0)
+                elif op == int(Operator.CEIL):
+                    res = torch.ceil(arg0)
+                elif op == int(Operator.LN):
+                    res = torch.log(arg0)  # Natural log is same as log
+                elif op == int(Operator.LOG10):
+                    res = torch.log10(arg0)
+                elif op == int(Operator.NEG):
+                    res = -arg0
+                elif op == int(Operator.INV):
+                    res = 1.0 / arg0
+                elif op == int(Operator.CUBE):
+                    res = arg0 * arg0 * arg0
+                elif op == int(Operator.FOURTH):
+                    res = arg0 * arg0 * arg0 * arg0
+                elif op == int(Operator.FIFTH):
+                    res = arg0 * arg0 * arg0 * arg0 * arg0
                 elif arity > 1 and arg1 is not None:
                     if op == int(Operator.ADD):
                         res = arg0 + arg1
@@ -151,6 +191,10 @@ def manual_run(x_tensor: Tensor, ops_tensor: Tensor, ch_tensor: Tensor, c_tensor
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_noop_nan(device : str) -> None:
+    if device == "cuda":
+        device = f"cuda:{get_cuda_device_with_min_memory()}"
+        
+
     # If noop is used, the output should be NaN
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
     ops_tensor = torch.tensor([[int(Operator.NO_OP)]], dtype=torch.int64)
@@ -175,7 +219,14 @@ def test_noop_nan(device : str) -> None:
 
 @pytest.fixture(params=['cpu', 'cuda'])
 def device(request: pytest.FixtureRequest) -> str:
-    return request.param
+    if request.param == "cpu":
+        return "cpu"
+    elif request.param == "cuda":
+        assert torch.cuda.is_available(), "CUDA is not available on this system."
+        index = get_cuda_device_with_min_memory()
+        return f"cuda:{index}"
+    else:
+        raise ValueError(f"Unknown device: {request.param}. Use 'cpu' or 'cuda'.")
 
 # 1. Test validate_inputs
 def test_validate_inputs_arity(device : str) -> None:
@@ -334,8 +385,9 @@ def test_batching(device : str) -> None:
     assert torch.allclose(custom_res, manual_res, atol=1e-6, equal_nan=True)
 
 # 5. Test CPU vs GPU
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_cpu_gpu_match() -> None:
+    index = get_cuda_device_with_min_memory()
+    assert torch.cuda.is_available()
     x_tensor = torch.randn(10, 2, dtype=torch.float32)
     ops_tensor = torch.tensor([[int(Operator.VAR_START_ID)], [int(Operator.VAR_START_ID)+1], [int(Operator.ADD)]], dtype=torch.int64)
     ch_tensor = -torch.ones(3, 1, 2, dtype=torch.int64)
@@ -346,7 +398,7 @@ def test_cpu_gpu_match() -> None:
     c_tensor = c_tensor.permute(1,0)
     
     cpu_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device='cpu')
-    gpu_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device='cuda')
+    gpu_res = build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=f'cuda:{index}')
     
     assert torch.allclose(cpu_res, gpu_res.cpu(), atol=1e-6, equal_nan=True)
 
@@ -503,11 +555,13 @@ def test_benchmark() -> None:
     cpu_time = time.time() - start_time
     print(f"Custom C++ (CPU): {cpu_time:.4f}s")
 
+    index = get_cuda_device_with_min_memory()
+
     if torch.cuda.is_available():
         # Custom GPU
         start_time = time.time()
-        build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device='cuda')
-        torch.cuda.synchronize()
+        build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=f'cuda:{index}')
+        torch.cuda.synchronize(device=f'cuda:{index}')  # Ensure all operations are complete
         gpu_time = time.time() - start_time
         print(f"Custom C++ (GPU): {gpu_time:.4f}s")
 
@@ -577,13 +631,13 @@ def test_large_benchmark() -> None:
     cpu_time = time.time() - start_time
     print(f"Large Benchmark - Custom C++ (CPU): {cpu_time:.4f}s")
 
-    if torch.cuda.is_available():
-        # Custom GPU
-        start_time = time.time()
-        build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device='cuda')
-        torch.cuda.synchronize()
-        gpu_time = time.time() - start_time
-        print(f"Large Benchmark - Custom C++ (GPU): {gpu_time:.4f}s")
+    index = get_cuda_device_with_min_memory()
+    # Custom GPU
+    start_time = time.time()
+    build_and_run(x_tensor, ops_tensor, ch_tensor, c_tensor, device=f'cuda:{index}')
+    torch.cuda.synchronize(device=f'cuda:{index}')
+    gpu_time = time.time() - start_time
+    print(f"Large Benchmark - Custom C++ (GPU): {gpu_time:.4f}s")
 
 
 # 10. Test error handling for gradients on invalid operations

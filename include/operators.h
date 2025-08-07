@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <limits>
 #include <c10/macros/Macros.h>
 #include <vector>
 
@@ -28,17 +29,33 @@ enum Operator : int
     LOG = 13,
     SQUARE = 14,
     SQRT = 15,
+    TAN = 16,
+    ARCSIN = 17,
+    ARCCOS = 18,
+    ARCTAN = 19,
+    SINH = 20,
+    COSH = 21,
+    TANH = 22,
+    FLOOR = 23,
+    CEIL = 24,
+    LN = 25,     // Natural logarithm (same as LOG but explicit)
+    LOG10 = 26,  // Base-10 logarithm
+    NEG = 27,    // Unary minus (u-)
+    INV = 28,    // Inverse (^-1)
+    CUBE = 29,   // ^3
+    FOURTH = 30, // ^4
+    FIFTH = 31,  // ^5
 
     // Binary Functions
-    ADD = 20,
-    SUB = 21,
-    MUL = 22,
-    DIV = 23,
-    POW = 24,
+    ADD = 40,
+    SUB = 41,
+    MUL = 42,
+    DIV = 43,
+    POW = 44,
 
     // Variable Start ID
     // An op_code >= VAR_START_ID represents variable X_{op_code - VAR_START_ID}
-    VAR_START_ID = 30
+    VAR_START_ID = 50
 };
 
 // Compile-time constants
@@ -67,6 +84,22 @@ C10_HOST_DEVICE inline bool is_valid_op(int op, int64_t n_variables)
     case LOG:
     case SQUARE:
     case SQRT:
+    case TAN:
+    case ARCSIN:
+    case ARCCOS:
+    case ARCTAN:
+    case SINH:
+    case COSH:
+    case TANH:
+    case FLOOR:
+    case CEIL:
+    case LN:
+    case LOG10:
+    case NEG:
+    case INV:
+    case CUBE:
+    case FOURTH:
+    case FIFTH:
     case ADD:
     case SUB:
     case MUL:
@@ -85,7 +118,7 @@ C10_HOST_DEVICE inline bool is_valid_op(int op, int64_t n_variables)
 
 C10_HOST_DEVICE inline int get_arity(int op)
 {
-    if (op >= SIN && op <= SQRT)
+    if (op >= SIN && op <= FIFTH)
         return 1;
     if (op >= ADD && op <= POW)
         return 2;
@@ -94,7 +127,7 @@ C10_HOST_DEVICE inline int get_arity(int op)
 
 C10_HOST_DEVICE inline bool is_constant(int op)
 {
-    return (op >= CONST_1 && op < SIN);
+    return (op >= CONST_1 && op <= E);
 }
 
 C10_HOST_DEVICE inline bool is_unary(int op)
@@ -112,6 +145,22 @@ C10_HOST_DEVICE inline bool is_functional_style(int64_t op_id)
     case EXP:
     case LOG:
     case SQRT:
+    case TAN:
+    case ARCSIN:
+    case ARCCOS:
+    case ARCTAN:
+    case SINH:
+    case COSH:
+    case TANH:
+    case FLOOR:
+    case CEIL:
+    case LN:
+    case LOG10:
+    case NEG:
+    case INV:
+    case CUBE:
+    case FOURTH:
+    case FIFTH:
         return true;
     default:
         return false;
@@ -140,6 +189,22 @@ C10_HOST_DEVICE inline bool is_right_associative(int op)
     case LOG:
     case SQUARE:
     case SQRT:
+    case TAN:
+    case ARCSIN:
+    case ARCCOS:
+    case ARCTAN:
+    case SINH:
+    case COSH:
+    case TANH:
+    case FLOOR:
+    case CEIL:
+    case LN:
+    case LOG10:
+    case NEG:
+    case INV:
+    case CUBE:
+    case FOURTH:
+    case FIFTH:
         return true; // Right associative
     default:
         return false; // Default to left associative for unknown ops
@@ -237,4 +302,133 @@ C10_HOST_DEVICE inline scalar_t pow_wrapper(scalar_t a, scalar_t b)
         return std::numeric_limits<scalar_t>::quiet_NaN(); // POLICY: Return NaN for negative base
     }
     return pow(a, b);
+}
+
+// --- Additional Unary Function Wrappers ---
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t tan_wrapper(scalar_t val)
+{
+    return tan(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t arcsin_wrapper(scalar_t val)
+{
+    // POLICY: Return NaN for values outside [-1, 1]
+    if (val < static_cast<scalar_t>(-1.0) || val > static_cast<scalar_t>(1.0))
+    {
+        return std::numeric_limits<scalar_t>::quiet_NaN();
+    }
+    return asin(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t arccos_wrapper(scalar_t val)
+{
+    // POLICY: Return NaN for values outside [-1, 1]
+    if (val < static_cast<scalar_t>(-1.0) || val > static_cast<scalar_t>(1.0))
+    {
+        return std::numeric_limits<scalar_t>::quiet_NaN();
+    }
+    return acos(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t arctan_wrapper(scalar_t val)
+{
+    return atan(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t sinh_wrapper(scalar_t val)
+{
+    return sinh(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t cosh_wrapper(scalar_t val)
+{
+    return cosh(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t tanh_wrapper(scalar_t val)
+{
+    return tanh(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t floor_wrapper(scalar_t val)
+{
+    return floor(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t ceil_wrapper(scalar_t val)
+{
+    return ceil(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t ln_wrapper(scalar_t val)
+{
+    // Natural logarithm - same as log_wrapper
+    if (val <= static_cast<scalar_t>(0.0))
+    {
+        return std::numeric_limits<scalar_t>::quiet_NaN();
+    }
+    return log(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t log10_wrapper(scalar_t val)
+{
+    // Base-10 logarithm
+    if (val <= static_cast<scalar_t>(0.0))
+    {
+        return std::numeric_limits<scalar_t>::quiet_NaN();
+    }
+    return log10(val);
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t neg_wrapper(scalar_t val)
+{
+    // Unary minus
+    return -val;
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t inv_wrapper(scalar_t val)
+{
+    // Inverse (^-1)
+    if (val == static_cast<scalar_t>(0.0))
+    {
+        return std::numeric_limits<scalar_t>::quiet_NaN();
+    }
+    return static_cast<scalar_t>(1.0) / val;
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t cube_wrapper(scalar_t val)
+{
+    // Cube (^3)
+    return val * val * val;
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t fourth_wrapper(scalar_t val)
+{
+    // Fourth power (^4)
+    scalar_t sq = val * val;
+    return sq * sq;
+}
+
+template <typename scalar_t>
+C10_HOST_DEVICE inline scalar_t fifth_wrapper(scalar_t val)
+{
+    // Fifth power (^5)
+    scalar_t sq = val * val;
+    return sq * sq * val;
 }

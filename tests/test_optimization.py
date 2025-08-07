@@ -5,6 +5,7 @@ import torch.nn as nn
 import pytest
 from symbolic_torch import Operator, create_constants, optimize
 from symbolic_torch.evaluation import evaluate
+from .utils import get_cuda_device_with_min_memory
 
 @pytest.mark.parametrize("device_str", ["cpu", "cuda"])
 def test_optimize_constants(device_str : str):
@@ -14,8 +15,12 @@ def test_optimize_constants(device_str : str):
     Y value is correct.
     """
     if not torch.cuda.is_available() and device_str == "cuda":
-        pytest.skip("CUDA not available")
-    device = torch.device(device_str)
+        raise ValueError("CUDA is not available on this system.")
+    if device_str == "cpu":
+        device = torch.device("cpu")
+    else:
+        index = get_cuda_device_with_min_memory()
+        device = torch.device(f"cuda:{index}")
 
     # --- Setup ---
     B, N, M, n_x = 2, 100, 5, 1
@@ -82,11 +87,17 @@ def test_large_batch_optimization(device_str: str):
     This test is marked as 'large' and can be skipped with `pytest -m "not large"`.
     """
     if not torch.cuda.is_available() and device_str == "cuda":
-        pytest.skip("CUDA not available")
-    
-    device = torch.device(device_str)
-    
-    B = 100000
+        raise ValueError("CUDA is not available on this system.")
+
+    if device_str == "cpu":
+        device = torch.device("cpu")
+    else:
+        index = get_cuda_device_with_min_memory()
+        device = f"cuda:{index}"
+        print(f"Using CUDA device: {device}")
+        device = torch.device(device)
+
+    B = 10000
     if device.type == 'cpu' and B >= 10000:
         pytest.skip("Skipping large optimization benchmark on CPU to save time.")
 
@@ -131,7 +142,7 @@ def test_large_batch_optimization(device_str: str):
     )
     
     if device.type == 'cuda':
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(device=device)
     
     end_time = time.time()
     
@@ -165,7 +176,13 @@ def test_very_large_noisy_optimization(device_str: str):
     This tests the optimizer's ability to find a best fit in a realistic scenario.
     """
     if not torch.cuda.is_available() and device_str == "cuda":
-        pytest.skip("CUDA not available")
+        raise ValueError("CUDA is not available on this system.")
+    if device_str == "cpu":
+        device = torch.device("cpu")
+    else:
+        index = get_cuda_device_with_min_memory()
+        device_str = f"cuda:{index}"
+        print(f"Using CUDA device: {device_str}")
         
     device = torch.device(device_str)
     B = 10000
@@ -237,7 +254,7 @@ def test_very_large_noisy_optimization(device_str: str):
         max_iter=300 # Increased iterations for this complex, noisy problem
     )
     if device.type == 'cuda':
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(device=device)
     end_time = time.time()
     
     duration = end_time - start_time

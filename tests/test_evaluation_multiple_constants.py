@@ -7,6 +7,7 @@ from symbolic_torch import Operator
 from symbolic_torch.evaluation import evaluate_backend
 # Import the new backend function
 from symbolic_torch._C import evaluate_multiple_constant_backend
+from tests.utils import get_cuda_device_with_min_memory
 
 NULL_CHILD = -1
 
@@ -14,8 +15,9 @@ NULL_CHILD = -1
 def device(request: pytest.FixtureRequest) -> str:
     """Parametrized fixture for CPU and CUDA devices."""
     if request.param == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-    return request.param
+        raise ValueError("CUDA is not available on this system.")
+    index = get_cuda_device_with_min_memory()
+    return f"cuda:{index}" if request.param == "cuda" else "cpu"
 
 # Test 1: Ensure expressions without constants are unaffected by the K dimension
 def test_no_constant_expressions_multiple_sets(device: str):
@@ -67,6 +69,24 @@ unary_ops_params = [
     (Operator.SIN, "sin(C)"),
     (Operator.COS, "cos(C)"),
     (Operator.EXP, "exp(C)"),
+    (Operator.LOG, "log(C)"),
+    (Operator.SQRT, "sqrt(C)"),
+    (Operator.TAN, "tan(C)"),
+    (Operator.ARCSIN, "arcsin(C)"),
+    (Operator.ARCCOS, "arccos(C)"),
+    (Operator.ARCTAN, "arctan(C)"),
+    (Operator.SINH, "sinh(C)"),
+    (Operator.COSH, "cosh(C)"),
+    (Operator.TANH, "tanh(C)"),
+    (Operator.FLOOR, "floor(C)"),
+    (Operator.CEIL, "ceil(C)"),
+    (Operator.LN, "ln(C)"),
+    (Operator.LOG10, "log10(C)"),
+    (Operator.NEG, "neg(C)"),
+    (Operator.INV, "inv(C)"),
+    (Operator.CUBE, "cube(C)"),
+    (Operator.FOURTH, "fourth(C)"),
+    (Operator.FIFTH, "fifth(C)"),
 ]
 
 @pytest.mark.parametrize("op, test_id", unary_ops_params, ids=[p[1] for p in unary_ops_params])

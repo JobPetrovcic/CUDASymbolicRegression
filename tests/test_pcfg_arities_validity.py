@@ -1,18 +1,22 @@
 import pytest
 import torch
 from symbolic_torch import ProbabilisticContextFreeGrammar, Operator
+from tests.utils import get_cuda_device_with_min_memory
 
 
-@pytest.fixture(params=["cpu", "cuda:1"])
+@pytest.fixture(params=["cpu", "cuda"])
 def device_str(request):
     """Parametrized fixture for device testing."""
     if request.param == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-    return request.param
-
+        raise ValueError("CUDA is not available on this system.")
+    if request.param == "cpu":
+        return "cpu"
+    else:
+        index = get_cuda_device_with_min_memory()
+        return f"cuda:{index}"  # Use the device with minimum memory available
 
 @pytest.fixture
-def pcfg(device_str):
+def pcfg(device_str : str) -> ProbabilisticContextFreeGrammar:
     """Create a PCFG instance for testing."""
     # Use a minimal grammar for testing
     grammar = "S -> 1 [1.0]"
@@ -59,33 +63,53 @@ def test_get_arities_hardcoded_values(pcfg):
         13: 1,  # LOG
         14: 1,  # SQUARE
         15: 1,  # SQRT
+        16: 1,  # TAN
+        17: 1,  # ARCSIN
+        18: 1,  # ARCCOS
+        19: 1,  # ARCTAN
+        20: 1,  # SINH
+        21: 1,  # COSH
+        22: 1,  # TANH
+        23: 1,  # FLOOR
+        24: 1,  # CEIL
+        25: 1,  # LN
+        26: 1,  # LOG10
+        27: 1,  # NEG
+        28: 1,  # INV
+        29: 1,  # CUBE
+        30: 1,  # FOURTH
+        31: 1,  # FIFTH
         
-        # Gaps from 16-19 (no operators defined)
-        16: 0,  # Undefined operator
-        17: 0,  # Undefined operator
-        18: 0,  # Undefined operator
-        19: 0,  # Undefined operator
+        # Gaps from 32-39 (no operators defined)
+        32: 0,  # Undefined operator
+        33: 0,  # Undefined operator
+        34: 0,  # Undefined operator
+        35: 0,  # Undefined operator
+        36: 0,  # Undefined operator
+        37: 0,  # Undefined operator
+        38: 0,  # Undefined operator
+        39: 0,  # Undefined operator
         
         # Binary functions
-        20: 2,  # ADD
-        21: 2,  # SUB
-        22: 2,  # MUL
-        23: 2,  # DIV
-        24: 2,  # POW
+        40: 2,  # ADD
+        41: 2,  # SUB
+        42: 2,  # MUL
+        43: 2,  # DIV
+        44: 2,  # POW
         
-        # Gaps from 25-29 (no operators defined)
-        25: 0,  # Undefined operator
-        26: 0,  # Undefined operator
-        27: 0,  # Undefined operator
-        28: 0,  # Undefined operator
-        29: 0,  # Undefined operator
+        # Gaps from 45-49 (no operators defined)
+        45: 0,  # Undefined operator
+        46: 0,  # Undefined operator
+        47: 0,  # Undefined operator
+        48: 0,  # Undefined operator
+        49: 0,  # Undefined operator
         
-        # Variables (VAR_START_ID = 30, with n_variables = 5)
-        30: 0,  # X_0
-        31: 0,  # X_1
-        32: 0,  # X_2
-        33: 0,  # X_3
-        34: 0,  # X_4
+        # Variables (VAR_START_ID = 50, with n_variables = 5)
+        50: 0,  # X_0
+        51: 0,  # X_1
+        52: 0,  # X_2
+        53: 0,  # X_3
+        54: 0,  # X_4
     }
     
     # Verify that we have the expected number of operators
@@ -133,33 +157,53 @@ def test_valid_ops_hardcoded_values(pcfg):
         13: True,  # LOG
         14: True,  # SQUARE
         15: True,  # SQRT
+        16: True,  # TAN
+        17: True,  # ARCSIN
+        18: True,  # ARCCOS
+        19: True,  # ARCTAN
+        20: True,  # SINH
+        21: True,  # COSH
+        22: True,  # TANH
+        23: True,  # FLOOR
+        24: True,  # CEIL
+        25: True,  # LN
+        26: True,  # LOG10
+        27: True,  # NEG
+        28: True,  # INV
+        29: True,  # CUBE
+        30: True,  # FOURTH
+        31: True,  # FIFTH
         
         # Gaps (undefined operators)
-        16: False, # Undefined operator - invalid
-        17: False, # Undefined operator - invalid
-        18: False, # Undefined operator - invalid
-        19: False, # Undefined operator - invalid
+        32: False, # Undefined operator - invalid
+        33: False, # Undefined operator - invalid
+        34: False, # Undefined operator - invalid
+        35: False, # Undefined operator - invalid
+        36: False, # Undefined operator - invalid
+        37: False, # Undefined operator - invalid
+        38: False, # Undefined operator - invalid
+        39: False, # Undefined operator - invalid
         
         # Binary functions
-        20: True,  # ADD
-        21: True,  # SUB
-        22: True,  # MUL
-        23: True,  # DIV
-        24: True,  # POW
+        40: True,  # ADD
+        41: True,  # SUB
+        42: True,  # MUL
+        43: True,  # DIV
+        44: True,  # POW
         
         # Gaps (undefined operators)
-        25: False, # Undefined operator - invalid
-        26: False, # Undefined operator - invalid
-        27: False, # Undefined operator - invalid
-        28: False, # Undefined operator - invalid
-        29: False, # Undefined operator - invalid
+        45: False, # Undefined operator - invalid
+        46: False, # Undefined operator - invalid
+        47: False, # Undefined operator - invalid
+        48: False, # Undefined operator - invalid
+        49: False, # Undefined operator - invalid
         
-        # Variables (VAR_START_ID = 30, with n_variables = 5)
-        30: True,  # X_0
-        31: True,  # X_1
-        32: True,  # X_2
-        33: True,  # X_3
-        34: True,  # X_4
+        # Variables (VAR_START_ID = 50, with n_variables = 5)
+        50: True,  # X_0
+        51: True,  # X_1
+        52: True,  # X_2
+        53: True,  # X_3
+        54: True,  # X_4
     }
     
     # Verify that we have the expected number of operators
@@ -187,10 +231,10 @@ def test_specific_operator_enum_values(pcfg):
     assert int(Operator.SIN) == 10
     assert int(Operator.COS) == 11
     assert int(Operator.SQRT) == 15
-    assert int(Operator.ADD) == 20
-    assert int(Operator.SUB) == 21
-    assert int(Operator.POW) == 24
-    assert int(Operator.VAR_START_ID) == 30
+    assert int(Operator.ADD) == 40
+    assert int(Operator.SUB) == 41
+    assert int(Operator.POW) == 44
+    assert int(Operator.VAR_START_ID) == 50
 
 
 def test_arities_and_validity_consistency(pcfg):

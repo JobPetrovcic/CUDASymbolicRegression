@@ -87,6 +87,72 @@ void ProbabilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int6
     add_symbol("SQRT", SQRT);
     add_symbol("Sqrt", SQRT);
 
+    add_symbol("tan", TAN);
+    add_symbol("TAN", TAN);
+    add_symbol("Tan", TAN);
+
+    add_symbol("arcsin", ARCSIN);
+    add_symbol("ARCSIN", ARCSIN);
+    add_symbol("asin", ARCSIN);
+    add_symbol("ASIN", ARCSIN);
+
+    add_symbol("arccos", ARCCOS);
+    add_symbol("ARCCOS", ARCCOS);
+    add_symbol("acos", ARCCOS);
+    add_symbol("ACOS", ARCCOS);
+
+    add_symbol("arctan", ARCTAN);
+    add_symbol("ARCTAN", ARCTAN);
+    add_symbol("atan", ARCTAN);
+    add_symbol("ATAN", ARCTAN);
+
+    add_symbol("sinh", SINH);
+    add_symbol("SINH", SINH);
+    add_symbol("Sinh", SINH);
+
+    add_symbol("cosh", COSH);
+    add_symbol("COSH", COSH);
+    add_symbol("Cosh", COSH);
+
+    add_symbol("tanh", TANH);
+    add_symbol("TANH", TANH);
+    add_symbol("Tanh", TANH);
+
+    add_symbol("floor", FLOOR);
+    add_symbol("FLOOR", FLOOR);
+    add_symbol("Floor", FLOOR);
+
+    add_symbol("ceil", CEIL);
+    add_symbol("CEIL", CEIL);
+    add_symbol("Ceil", CEIL);
+
+    add_symbol("ln", LN);
+    add_symbol("LN", LN);
+
+    add_symbol("log10", LOG10);
+    add_symbol("LOG10", LOG10);
+
+    add_symbol("neg", NEG);
+    add_symbol("NEG", NEG);
+    add_symbol("minus", NEG);
+    add_symbol("-u", NEG);
+
+    add_symbol("inv", INV);
+    add_symbol("INV", INV);
+    add_symbol("^-1", INV);
+
+    add_symbol("cube", CUBE);
+    add_symbol("CUBE", CUBE);
+    add_symbol("^3", CUBE);
+
+    add_symbol("fourth", FOURTH);
+    add_symbol("FOURTH", FOURTH);
+    add_symbol("^4", FOURTH);
+
+    add_symbol("fifth", FIFTH);
+    add_symbol("FIFTH", FIFTH);
+    add_symbol("^5", FIFTH);
+
     add_symbol("+", ADD);
 
     add_symbol("-", SUB);
@@ -139,6 +205,22 @@ void ProbabilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int6
     this->precedence.index_put_({LOG}, 4);
     this->precedence.index_put_({SQUARE}, 4);
     this->precedence.index_put_({SQRT}, 4);
+    this->precedence.index_put_({TAN}, 4);
+    this->precedence.index_put_({ARCSIN}, 4);
+    this->precedence.index_put_({ARCCOS}, 4);
+    this->precedence.index_put_({ARCTAN}, 4);
+    this->precedence.index_put_({SINH}, 4);
+    this->precedence.index_put_({COSH}, 4);
+    this->precedence.index_put_({TANH}, 4);
+    this->precedence.index_put_({FLOOR}, 4);
+    this->precedence.index_put_({CEIL}, 4);
+    this->precedence.index_put_({LN}, 4);
+    this->precedence.index_put_({LOG10}, 4);
+    this->precedence.index_put_({NEG}, 4);
+    this->precedence.index_put_({INV}, 4);
+    this->precedence.index_put_({CUBE}, 4);
+    this->precedence.index_put_({FOURTH}, 4);
+    this->precedence.index_put_({FIFTH}, 4);
 
     this->n_operators = VAR_START_ID + n_variables;
 

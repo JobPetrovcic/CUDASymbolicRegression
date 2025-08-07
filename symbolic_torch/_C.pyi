@@ -19,6 +19,22 @@ class Operator(Enum):
     LOG: int
     SQUARE: int
     SQRT: int
+    TAN: int
+    ARCSIN: int
+    ARCCOS: int
+    ARCTAN: int
+    SINH: int
+    COSH: int
+    TANH: int
+    FLOOR: int
+    CEIL: int
+    LN: int
+    LOG10: int
+    NEG: int
+    INV: int
+    CUBE: int
+    FOURTH: int
+    FIFTH: int
     ADD: int
     SUB: int
     MUL: int

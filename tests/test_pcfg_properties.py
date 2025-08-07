@@ -1,6 +1,7 @@
 import pytest
 import torch
 from symbolic_torch import ProbabilisticContextFreeGrammar
+from tests.utils import get_cuda_device_with_min_memory
 
 # A minimal grammar for testing initialization
 test_grammar = "S -> 1 [1.0]"
@@ -11,10 +12,14 @@ def test_pcfg_properties_are_exposed_and_correct(device_str: str):
     Tests that the PCFG properties are exposed to Python, are read-only,
     and have the correct values they were initialized with.
     """
-    if not torch.cuda.is_available() and device_str == "cuda":
-        pytest.skip("CUDA not available")
-    
-    device = torch.device(device_str)
+    """Parametrized fixture for device testing."""
+    if device_str == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA is not available on this system.")
+    if device_str == "cpu":
+        device = torch.device("cpu")
+    else:
+        index = get_cuda_device_with_min_memory()
+        device = torch.device(f"cuda:{index}")  # Use the device with minimum memory available
     
     # Define test parameters
     grammar = test_grammar

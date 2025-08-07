@@ -141,6 +141,54 @@ void evaluation_forward_step_k_cpu_impl(
             case SQRT:
                 result = sqrt_wrapper(arg0);
                 break;
+            case TAN:
+                result = tan_wrapper(arg0);
+                break;
+            case ARCSIN:
+                result = arcsin_wrapper(arg0);
+                break;
+            case ARCCOS:
+                result = arccos_wrapper(arg0);
+                break;
+            case ARCTAN:
+                result = arctan_wrapper(arg0);
+                break;
+            case SINH:
+                result = sinh_wrapper(arg0);
+                break;
+            case COSH:
+                result = cosh_wrapper(arg0);
+                break;
+            case TANH:
+                result = tanh_wrapper(arg0);
+                break;
+            case FLOOR:
+                result = floor_wrapper(arg0);
+                break;
+            case CEIL:
+                result = ceil_wrapper(arg0);
+                break;
+            case LN:
+                result = ln_wrapper(arg0);
+                break;
+            case LOG10:
+                result = log10_wrapper(arg0);
+                break;
+            case NEG:
+                result = neg_wrapper(arg0);
+                break;
+            case INV:
+                result = inv_wrapper(arg0);
+                break;
+            case CUBE:
+                result = cube_wrapper(arg0);
+                break;
+            case FOURTH:
+                result = fourth_wrapper(arg0);
+                break;
+            case FIFTH:
+                result = fifth_wrapper(arg0);
+                break;
             case ADD:
                 result = add_wrapper(arg0, arg1);
                 break;
@@ -411,6 +459,192 @@ void evaluation_backward_step_k_cpu_impl(
                 grad_cache_acc[ch1_idx][n][b] += g_out1;
                 break;
             }
+            case TAN:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t cos_val = cos_wrapper(arg0);
+                scalar_t g_out0 = div_wrapper(g_in, mul_wrapper(cos_val, cos_val)); // sec^2(x) = 1/cos^2(x)
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case ARCSIN:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0;
+                if (arg0 < static_cast<scalar_t>(-1.0) || arg0 > static_cast<scalar_t>(1.0))
+                    g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                else
+                {
+                    scalar_t denom = sqrt_wrapper(static_cast<scalar_t>(1.0) - mul_wrapper(arg0, arg0));
+                    g_out0 = div_wrapper(g_in, denom); // d/dx arcsin(x) = 1/sqrt(1-x^2)
+                }
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case ARCCOS:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0;
+                if (arg0 < static_cast<scalar_t>(-1.0) || arg0 > static_cast<scalar_t>(1.0))
+                    g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                else
+                {
+                    scalar_t denom = sqrt_wrapper(static_cast<scalar_t>(1.0) - mul_wrapper(arg0, arg0));
+                    g_out0 = -div_wrapper(g_in, denom); // d/dx arccos(x) = -1/sqrt(1-x^2)
+                }
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case ARCTAN:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t denom = static_cast<scalar_t>(1.0) + mul_wrapper(arg0, arg0);
+                scalar_t g_out0 = div_wrapper(g_in, denom); // d/dx arctan(x) = 1/(1+x^2)
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case SINH:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, cosh_wrapper(arg0)); // d/dx sinh(x) = cosh(x)
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case COSH:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, sinh_wrapper(arg0)); // d/dx cosh(x) = sinh(x)
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case TANH:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t tanh_val = tanh_wrapper(arg0);
+                scalar_t g_out0 = mul_wrapper(g_in, (static_cast<scalar_t>(1.0) - mul_wrapper(tanh_val, tanh_val))); // d/dx tanh(x) = 1 - tanh^2(x)
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case FLOOR:
+            {
+                // Floor function has zero gradient everywhere except at integer points where it's undefined
+                // We'll treat it as having zero gradient everywhere for practical purposes
+                break;
+            }
+            case CEIL:
+            {
+                // Ceiling function has zero gradient everywhere except at integer points where it's undefined
+                // We'll treat it as having zero gradient everywhere for practical purposes
+                break;
+            }
+            case LN:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = div_wrapper(g_in, arg0); // d/dx ln(x) = 1/x
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case LOG10:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = div_wrapper(g_in, mul_wrapper(arg0, log_wrapper(static_cast<scalar_t>(10.0)))); // d/dx log10(x) = 1/(x*ln(10))
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case NEG:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t g_out0 = -g_in; // d/dx (-x) = -1
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case INV:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0;
+                if (arg0 == static_cast<scalar_t>(0.0))
+                    g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                else
+                    g_out0 = -div_wrapper(g_in, mul_wrapper(arg0, arg0)); // d/dx (1/x) = -1/x^2
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case CUBE:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(3.0), mul_wrapper(arg0, arg0))); // d/dx x^3 = 3*x^2
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case FOURTH:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(4.0), cube_wrapper(arg0))); // d/dx x^4 = 4*x^3
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
+            case FIFTH:
+            {
+                if (g_in == static_cast<scalar_t>(0.0))
+                    continue;
+                int64_t ch0_idx = ch_acc[k][b][0];
+                scalar_t arg0 = cache_acc[ch0_idx][n][b];
+                scalar_t g_out0 = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(5.0), fourth_wrapper(arg0))); // d/dx x^5 = 5*x^4
+#pragma omp atomic
+                grad_cache_acc[ch0_idx][n][b] += g_out0;
+                break;
+            }
             default:
             {
                 if (g_in == static_cast<scalar_t>(0.0))
@@ -561,6 +795,54 @@ void evaluation_multiple_forward_step_k_cpu_impl(
                     break;
                 case SQRT:
                     result = sqrt_wrapper(arg0);
+                    break;
+                case TAN:
+                    result = tan_wrapper(arg0);
+                    break;
+                case ARCSIN:
+                    result = arcsin_wrapper(arg0);
+                    break;
+                case ARCCOS:
+                    result = arccos_wrapper(arg0);
+                    break;
+                case ARCTAN:
+                    result = arctan_wrapper(arg0);
+                    break;
+                case SINH:
+                    result = sinh_wrapper(arg0);
+                    break;
+                case COSH:
+                    result = cosh_wrapper(arg0);
+                    break;
+                case TANH:
+                    result = tanh_wrapper(arg0);
+                    break;
+                case FLOOR:
+                    result = floor_wrapper(arg0);
+                    break;
+                case CEIL:
+                    result = ceil_wrapper(arg0);
+                    break;
+                case LN:
+                    result = ln_wrapper(arg0);
+                    break;
+                case LOG10:
+                    result = log10_wrapper(arg0);
+                    break;
+                case NEG:
+                    result = neg_wrapper(arg0);
+                    break;
+                case INV:
+                    result = inv_wrapper(arg0);
+                    break;
+                case CUBE:
+                    result = cube_wrapper(arg0);
+                    break;
+                case FOURTH:
+                    result = fourth_wrapper(arg0);
+                    break;
+                case FIFTH:
+                    result = fifth_wrapper(arg0);
                     break;
                 case ADD:
                     result = add_wrapper(arg0, arg1);
@@ -828,6 +1110,192 @@ void evaluation_multiple_backward_step_k_cpu_impl(
                     grad_cache_acc[ch0][n][b][const_idx] += g_out0;
 #pragma omp atomic
                     grad_cache_acc[ch1][n][b][const_idx] += g_out1;
+                    break;
+                }
+                case TAN:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t cos_val = cos_wrapper(arg0);
+                    scalar_t g_out0 = div_wrapper(g_in, mul_wrapper(cos_val, cos_val)); // sec^2(x) = 1/cos^2(x)
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case ARCSIN:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0;
+                    if (arg0 < static_cast<scalar_t>(-1.0) || arg0 > static_cast<scalar_t>(1.0))
+                        g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                    else
+                    {
+                        scalar_t denom = sqrt_wrapper(static_cast<scalar_t>(1.0) - mul_wrapper(arg0, arg0));
+                        g_out0 = div_wrapper(g_in, denom); // d/dx arcsin(x) = 1/sqrt(1-x^2)
+                    }
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case ARCCOS:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0;
+                    if (arg0 < static_cast<scalar_t>(-1.0) || arg0 > static_cast<scalar_t>(1.0))
+                        g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                    else
+                    {
+                        scalar_t denom = sqrt_wrapper(static_cast<scalar_t>(1.0) - mul_wrapper(arg0, arg0));
+                        g_out0 = -div_wrapper(g_in, denom); // d/dx arccos(x) = -1/sqrt(1-x^2)
+                    }
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case ARCTAN:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t denom = static_cast<scalar_t>(1.0) + mul_wrapper(arg0, arg0);
+                    scalar_t g_out0 = div_wrapper(g_in, denom); // d/dx arctan(x) = 1/(1+x^2)
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case SINH:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0 = mul_wrapper(g_in, cosh_wrapper(arg0)); // d/dx sinh(x) = cosh(x)
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case COSH:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0 = mul_wrapper(g_in, sinh_wrapper(arg0)); // d/dx cosh(x) = sinh(x)
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case TANH:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t tanh_val = tanh_wrapper(arg0);
+                    scalar_t g_out0 = mul_wrapper(g_in, (static_cast<scalar_t>(1.0) - mul_wrapper(tanh_val, tanh_val))); // d/dx tanh(x) = 1 - tanh^2(x)
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case FLOOR:
+                {
+                    // Floor function has zero gradient everywhere except at integer points where it's undefined
+                    // We'll treat it as having zero gradient everywhere for practical purposes
+                    break;
+                }
+                case CEIL:
+                {
+                    // Ceiling function has zero gradient everywhere except at integer points where it's undefined
+                    // We'll treat it as having zero gradient everywhere for practical purposes
+                    break;
+                }
+                case LN:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0 = div_wrapper(g_in, arg0); // d/dx ln(x) = 1/x
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case LOG10:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0 = div_wrapper(g_in, mul_wrapper(arg0, log_wrapper(static_cast<scalar_t>(10.0)))); // d/dx log10(x) = 1/(x*ln(10))
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case NEG:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t g_out0 = -g_in; // d/dx (-x) = -1
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case INV:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0;
+                    if (arg0 == static_cast<scalar_t>(0.0))
+                        g_out0 = std::numeric_limits<scalar_t>::quiet_NaN();
+                    else
+                        g_out0 = -div_wrapper(g_in, mul_wrapper(arg0, arg0)); // d/dx (1/x) = -1/x^2
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case CUBE:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0 = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(3.0), mul_wrapper(arg0, arg0))); // d/dx x^3 = 3*x^2
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case FOURTH:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0 = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(4.0), cube_wrapper(arg0))); // d/dx x^4 = 4*x^3
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
+                    break;
+                }
+                case FIFTH:
+                {
+                    if (g_in == static_cast<scalar_t>(0.0))
+                        continue;
+                    int64_t ch0 = ch_acc[k][b][0];
+                    scalar_t arg0 = cache_acc[ch0][n][b][const_idx];
+                    scalar_t g_out0 = mul_wrapper(g_in, mul_wrapper(static_cast<scalar_t>(5.0), fourth_wrapper(arg0))); // d/dx x^5 = 5*x^4
+#pragma omp atomic
+                    grad_cache_acc[ch0][n][b][const_idx] += g_out0;
                     break;
                 }
                 default:

@@ -8,15 +8,18 @@ import pytest
 
 # Import the class to be tested
 from symbolic_torch.lbfgs_batch import LBFGS_batch
+from .utils import get_cuda_device_with_min_memory
 
 
 # --- Test Helper Fixtures ---
 
-@pytest.fixture(scope="module")
-def device():
-    """Provides the device (CPU or CUDA) for the test module."""
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
+@pytest.fixture(params=['cpu', 'cuda'], scope="module")
+def device(request: pytest.FixtureRequest) -> str:
+    """Parametrized fixture for CPU and CUDA devices."""
+    if request.param == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA is not available on this system.")
+    index = get_cuda_device_with_min_memory()
+    return f"cuda:{index}" if request.param == "cuda" else "cpu"
 
 class batchedRosenbrock(nn.Module):
     """Test function for optimization. Minimum is at (1, 1)."""
@@ -84,6 +87,10 @@ def test_benchmark_large_batch(benchmark, device : str):
     
     if device == 'cpu' and n_problems > 10_000:
         pytest.skip("Skipping large benchmark on CPU to save time.")
+    
+    if device == 'cuda':
+        index = get_cuda_device_with_min_memory()
+        device = f"cuda:{index}"
 
     model = batchedRosenbrock(n_problems, device=device)
     x0 = torch.randn(2, n_problems, requires_grad=True, device=device)
@@ -108,7 +115,7 @@ def test_benchmark_large_batch(benchmark, device : str):
         optimizer.step(closure)
         # For GPU, wait for all kernels to finish
         if device == 'cuda':
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(device=device)
 
     # The benchmark fixture handles timing, warm-up, and statistics
     benchmark(target_func)

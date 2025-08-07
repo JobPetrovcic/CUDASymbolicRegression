@@ -3,6 +3,7 @@ import pytest
 from typing import List
 
 from symbolic_torch import ProbabilisticContextFreeGrammar, Operator
+from .utils import get_cuda_device_with_min_memory
 
 # A standard grammar that includes all operator types for thorough testing
 test_grammar: str = """
@@ -44,13 +45,14 @@ def pcfg_cpu() -> ProbabilisticContextFreeGrammar:
 def pcfg_cuda() -> ProbabilisticContextFreeGrammar:
     """Provides a PCFG instance configured for CUDA, skipping if not available."""
     if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
+        raise ValueError("CUDA is not available on this system.")
+    index = get_cuda_device_with_min_memory()
     return ProbabilisticContextFreeGrammar(
         grammar=test_grammar,
         start_symbol="E",
         padded_maximum_length=64,
         n_variables=2,
-        device=torch.device("cuda"),
+        device=torch.device(f"cuda:{index}"),
     )
 
 @pytest.fixture(params=["cpu", "cuda"])
@@ -105,7 +107,7 @@ class TestInfixConversions:
         run_conversion_test(pcfg, conversion_type, [token], [token])
 
     # --- Group 2: Functional Unary Operators ---
-    @pytest.mark.parametrize("op", ["sin", "cos", "exp", "log", "sqrt"])
+    @pytest.mark.parametrize("op", ["sin", "cos", "exp", "log", "sqrt", "tan", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "floor", "ceil", "ln", "log10", "neg", "inv", "cube"])
     def test_functional_unary_ops(self, pcfg: ProbabilisticContextFreeGrammar, conversion_type: str, op: str) -> None:
         input_str = [op, '(', 'X_0', ')']
         expected_str = [op, '(', 'X_0', ')']
