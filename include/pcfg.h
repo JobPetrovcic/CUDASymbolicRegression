@@ -87,6 +87,7 @@ public:
         }
         return valid_ops;
     }
+    std::vector<std::string> available_operators() const;
 
 private:
     int64_t terminal_limit;

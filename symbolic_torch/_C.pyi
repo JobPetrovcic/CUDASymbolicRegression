@@ -136,6 +136,11 @@ class ProbabilisticContextFreeGrammar:
         Returns a tensor indicating which operators are valid based on the number of variables.
         """
         ...
+    def available_operators(self) -> list[str]:
+        """
+        Get all available symbols in the grammar.
+        """
+        ...
 
 def get_arity(op: Operator) -> int:
     ...

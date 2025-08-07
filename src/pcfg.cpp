@@ -961,6 +961,20 @@ torch::Tensor ProbabilisticContextFreeGrammar::prefix_to_infix(torch::Tensor exp
     return infix_out;
 }
 
+std::vector<std::string> ProbabilisticContextFreeGrammar::available_operators() const
+{
+    std::vector<std::string> symbols;
+    symbols.reserve(id_to_symbol.size());
+
+    for (const auto &pair : id_to_symbol)
+    {
+        if (pair.first < this->n_operators)
+            symbols.push_back(pair.second);
+    }
+
+    return symbols;
+}
+
 // Export using PyBind11
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -1014,5 +1028,6 @@ void init_pcfg(pybind11::module &m)
              pybind11::arg("symbol"))
         .def_readonly("n_operators", &ProbabilisticContextFreeGrammar::n_operators, "Get the number of operators in the grammar")
         .def("get_arities", &ProbabilisticContextFreeGrammar::get_arities, "Get the arities of the operators in the grammar")
-        .def("valid_ops", &ProbabilisticContextFreeGrammar::valid_ops, "Check if the operators in the grammar are valid");
+        .def("valid_ops", &ProbabilisticContextFreeGrammar::valid_ops, "Check if the operators in the grammar are valid")
+        .def("available_operators", &ProbabilisticContextFreeGrammar::available_operators, "Get all available symbols in the grammar");
 }
