@@ -1208,3 +1208,148 @@ void prefix_to_infix_cuda_impl(
     prefix_to_infix_kernel<<<blocks, threads>>>(
         prefix_acc, infix_acc, errors_acc, lparen_id, rparen_id, B, M_prefix, M_infix);
 }
+
+__global__ void prefix_to_postfix_kernel(
+    const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix, int64_t M_postfix)
+{
+    int b = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= B)
+        return;
+
+    errors_acc[b] = 0;
+
+    // Per-thread workspace for building sub-expressions
+    int64_t workspace[HARD_MAX_LENGTH * 2];
+    int32_t workspace_ptr = 0;
+
+    // Stack holds pointers (start_idx, len) into the workspace
+    int32_t stack_starts[HARD_MAX_LENGTH * 2];
+    int32_t stack_lens[HARD_MAX_LENGTH * 2];
+    int32_t stack_ptr = 0;
+
+    // Find the actual length of the expression to avoid processing padding
+    int32_t len = 0;
+    while (len < M_prefix && prefix_acc[b][len] != NO_OP)
+    {
+        len++;
+    }
+
+    // Iterate from RIGHT to LEFT for prefix notation
+    for (int j = len - 1; j >= 0; --j)
+    {
+        int64_t token_id = prefix_acc[b][j];
+
+        int arity = get_arity(token_id);
+
+        if (arity == 0)
+        { // Operand (variable or constant)
+            if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                break;
+            }
+            stack_starts[stack_ptr] = workspace_ptr;
+            stack_lens[stack_ptr] = 1;
+            workspace[workspace_ptr++] = token_id;
+            stack_ptr++;
+        }
+        else if (arity == 1)
+        { // Unary operator
+            if (stack_ptr < 1)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
+                break;
+            }
+            stack_ptr--;
+            int32_t operand_start = stack_starts[stack_ptr];
+            int32_t operand_len = stack_lens[stack_ptr];
+
+            if (workspace_ptr + operand_len + 1 > HARD_MAX_LENGTH * 2)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                break;
+            }
+            stack_starts[stack_ptr] = workspace_ptr;
+            stack_lens[stack_ptr] = operand_len + 1;
+            // Copy operand first, then operator (postfix order)
+            for (int k = 0; k < operand_len; ++k)
+                workspace[workspace_ptr++] = workspace[operand_start + k];
+            workspace[workspace_ptr++] = token_id;
+            stack_ptr++;
+        }
+        else if (arity == 2)
+        { // Binary operator
+            if (stack_ptr < 2)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
+                break;
+            }
+            // For prefix to postfix, the first operand popped is the left operand
+            stack_ptr--;
+            int32_t left_start = stack_starts[stack_ptr];
+            int32_t left_len = stack_lens[stack_ptr];
+            stack_ptr--;
+            int32_t right_start = stack_starts[stack_ptr];
+            int32_t right_len = stack_lens[stack_ptr];
+
+            if (workspace_ptr + left_len + right_len + 1 > HARD_MAX_LENGTH * 2)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                break;
+            }
+            stack_starts[stack_ptr] = workspace_ptr;
+            stack_lens[stack_ptr] = left_len + right_len + 1;
+            // Copy left operand, then right operand, then operator (postfix order)
+            for (int k = 0; k < left_len; ++k)
+                workspace[workspace_ptr++] = workspace[left_start + k];
+            for (int k = 0; k < right_len; ++k)
+                workspace[workspace_ptr++] = workspace[right_start + k];
+            workspace[workspace_ptr++] = token_id;
+            stack_ptr++;
+        }
+    }
+
+    if (errors_acc[b] == 0)
+    {
+        if (stack_ptr != 1)
+        {
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
+        }
+        else
+        {
+            int32_t final_len = stack_lens[0];
+            if (final_len > M_postfix)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_POSTFIX_TOO_LONG);
+            }
+            else
+            {
+                int32_t final_start = stack_starts[0];
+                for (int k = 0; k < final_len; ++k)
+                {
+                    postfix_acc[b][k] = workspace[final_start + k];
+                }
+                // Add padding
+                for (int k = final_len; k < M_postfix; ++k)
+                {
+                    postfix_acc[b][k] = NO_OP;
+                }
+            }
+        }
+    }
+}
+
+void prefix_to_postfix_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix, int64_t M_postfix)
+{
+    const int threads = THREAD_COUNT;
+    const int blocks = (B + threads - 1) / threads;
+    prefix_to_postfix_kernel<<<blocks, threads>>>(
+        prefix_acc, postfix_acc, errors_acc, B, M_prefix, M_postfix);
+}

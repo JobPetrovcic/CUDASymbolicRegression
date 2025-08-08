@@ -49,10 +49,11 @@ enum class ErrorCode : int64_t
     // --- Postfix/Prefix-to-Infix Conversion Errors (from postfix_to_infix/prefix_to_infix) ---
     CONVERSION_ERROR_START = 500,
     CONVERSION_RESULTING_INFIX_TOO_LONG = 501,   // The resulting infix string exceeded the maximum allowed length.
-    CONVERSION_INTERNAL_STACK_OVERFLOW = 502,    // Internal stack for building infix string overflowed.
-    CONVERSION_UNARY_OP_MISSING_OPERAND = 503,   // Malformed input: a unary operator was found without an operand on the stack.
-    CONVERSION_BINARY_OP_MISSING_OPERANDS = 504, // Malformed input: a binary operator was found with fewer than two operands on the stack.
-    CONVERSION_MALFORMED_EXPRESSION = 505,       // Malformed input: e.g., too many items left on the stack at the end of conversion.
+    CONVERSION_RESULTING_POSTFIX_TOO_LONG = 502, // The resulting postfix string exceeded the maximum allowed length.
+    CONVERSION_INTERNAL_STACK_OVERFLOW = 503,    // Internal stack for building infix string overflowed.
+    CONVERSION_UNARY_OP_MISSING_OPERAND = 504,   // Malformed input: a unary operator was found without an operand on the stack.
+    CONVERSION_BINARY_OP_MISSING_OPERANDS = 505, // Malformed input: a binary operator was found with fewer than two operands on the stack.
+    CONVERSION_MALFORMED_EXPRESSION = 506,       // Malformed input: e.g., too many items left on the stack at the end of conversion.
 
 };
 
@@ -142,6 +143,9 @@ inline std::string getErrorMessage(ErrorCode code, const std::string &context = 
     // --- Conversion ---
     case ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG:
         base_message = "Conversion failed: Resulting infix expression is longer than the maximum allowed length.";
+        break;
+    case ErrorCode::CONVERSION_RESULTING_POSTFIX_TOO_LONG:
+        base_message = "Conversion failed: Resulting postfix expression is longer than the maximum allowed length.";
         break;
     case ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW:
         base_message = "Conversion failed: Internal workspace stack overflowed.";

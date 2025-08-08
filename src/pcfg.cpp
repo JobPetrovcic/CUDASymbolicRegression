@@ -964,6 +964,35 @@ torch::Tensor ProbabilisticContextFreeGrammar::prefix_to_infix(torch::Tensor exp
     return infix_out;
 }
 
+torch::Tensor ProbabilisticContextFreeGrammar::prefix_to_postfix(torch::Tensor expressions, int64_t max_postfix_len, int verbosity)
+{
+    int64_t B = expressions.size(0);
+    int64_t M_prefix = expressions.size(1);
+
+    auto postfix_out = torch::full({B, max_postfix_len}, NO_OP, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    if (device.is_cuda())
+    {
+        prefix_to_postfix_cuda_impl(
+            expressions.packed_accessor32<int64_t, 2>(),
+            postfix_out.packed_accessor32<int64_t, 2>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            B, M_prefix, max_postfix_len);
+    }
+    else
+    {
+        prefix_to_postfix_cpu_impl(
+            expressions.accessor<int64_t, 2>(),
+            postfix_out.accessor<int64_t, 2>(),
+            errors.accessor<int64_t, 1>(),
+            B, M_prefix, max_postfix_len);
+    }
+
+    process_parsing_errors(errors, expressions, "prefix to postfix conversion", verbosity);
+    return postfix_out;
+}
+
 std::vector<std::string> ProbabilisticContextFreeGrammar::available_operators() const
 {
     std::vector<std::string> symbols;
@@ -1018,6 +1047,10 @@ void init_pcfg(pybind11::module &m)
         .def("prefix_to_infix", &ProbabilisticContextFreeGrammar::prefix_to_infix, "Convert a batch of prefix expressions to infix tensors.",
              pybind11::arg("expressions"),
              pybind11::arg("max_infix_len"),
+             pybind11::arg("verbosity") = 0)
+        .def("prefix_to_postfix", &ProbabilisticContextFreeGrammar::prefix_to_postfix, "Convert a batch of prefix expressions to postfix tensors.",
+             pybind11::arg("expressions"),
+             pybind11::arg("max_postfix_len"),
              pybind11::arg("verbosity") = 0)
 
         .def_readonly("device", &ProbabilisticContextFreeGrammar::device)
