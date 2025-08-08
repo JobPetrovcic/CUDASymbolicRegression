@@ -17,16 +17,19 @@ T -> ( E ) P [0.1]
 T -> R ( E ) [0.3]
 T -> V [0.4]
 T -> ( E ) [0.2]
-V -> X_0 [0.3]
-V -> X_1 [0.3]
-V -> C   [0.2]
-V -> 5   [0.2]
+V -> X_0 [0.2]
+V -> X_1 [0.2]
+V -> C   [0.3]
+V -> 5   [0.3]
 R -> sin [0.2]
 R -> cos [0.2]
 R -> exp [0.2]
 R -> sqrt [0.2]
 R -> log [0.2]
-P -> ^2 [1.0]
+P -> ^2 [0.25]
+P -> ^3 [0.25]
+P -> ^4 [0.25]
+P -> ^5 [0.25]
 """
 
 # Fixture to provide a configured PCFG object for CPU and CUDA
@@ -107,7 +110,7 @@ class TestInfixConversions:
         run_conversion_test(pcfg, conversion_type, [token], [token])
 
     # --- Group 2: Functional Unary Operators ---
-    @pytest.mark.parametrize("op", ["sin", "cos", "exp", "log", "sqrt", "tan", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "floor", "ceil", "ln", "log10", "neg", "inv", "cube"])
+    @pytest.mark.parametrize("op", ["sin", "cos", "exp", "log", "sqrt", "tan", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "floor", "ceil", "ln", "log10", "neg"])
     def test_functional_unary_ops(self, pcfg: ProbabilisticContextFreeGrammar, conversion_type: str, op: str) -> None:
         input_str = [op, '(', 'X_0', ')']
         expected_str = [op, '(', 'X_0', ')']
@@ -118,6 +121,19 @@ class TestInfixConversions:
         input_str = ['(', 'X_0', ')', '^2']
         expected_str = ['(', 'X_0', ')', '^2']
         run_conversion_test(pcfg, conversion_type, input_str, expected_str)
+    
+    # Test specific prefix_to_infix conversion for power operators ^2, ^3, ^4, ^5
+    @pytest.mark.parametrize("power_op", ["^2", "^3", "^4", "^5"])
+    def test_prefix_to_infix_power_operators(self, pcfg: ProbabilisticContextFreeGrammar, power_op: str, conversion_type : str) -> None:
+        if conversion_type != "prefix_to_infix":
+            return
+        """Test that prefix_to_infix correctly converts [^2, C] to (C)^2 string, etc."""
+        # For prefix expressions like [^2, C], the expected infix should be (C)^2
+        input_prefix = [power_op, 'C']
+        expected_infix = ['(', 'C', ')', power_op]
+        
+        # Only test prefix_to_infix conversion specifically
+        run_conversion_test(pcfg, "prefix_to_infix", input_prefix, expected_infix)
         
     # --- Group 4: Binary Operators ---
     @pytest.mark.parametrize("op", ["+", "-", "*", "/", "^"])

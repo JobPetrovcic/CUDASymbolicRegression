@@ -60,7 +60,6 @@ enum Operator : int
 
 // Compile-time constants
 constexpr size_t MAX_ARITY = 2;
-constexpr size_t MAX_VARS = 30; // Max number of X variables
 
 constexpr int64_t NULL_CHILD = -1;
 

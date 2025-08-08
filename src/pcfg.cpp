@@ -144,14 +144,17 @@ void ProbabilisticContextFreeGrammar::get_initial_symbol_map_and_precedence(int6
     add_symbol("^3", CUBE);
     add_symbol("cube", CUBE);
     add_symbol("CUBE", CUBE);
+    add_symbol("Cube", CUBE);
 
     add_symbol("^4", FOURTH);
     add_symbol("fourth", FOURTH);
     add_symbol("FOURTH", FOURTH);
+    add_symbol("Fourth", FOURTH);
 
     add_symbol("^5", FIFTH);
     add_symbol("fifth", FIFTH);
     add_symbol("FIFTH", FIFTH);
+    add_symbol("Fifth", FIFTH);
 
     add_symbol("+", ADD);
 

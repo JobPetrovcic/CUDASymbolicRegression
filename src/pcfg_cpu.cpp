@@ -834,7 +834,7 @@ void postfix_to_infix_cpu_impl(
                     new_expr.push_back(rparen_id);
                 }
                 else
-                { // e.g. SQUARE is postfix style
+                {
                     new_expr.push_back(lparen_id);
                     new_expr.insert(new_expr.end(), operand.begin(), operand.end());
                     new_expr.push_back(rparen_id);
