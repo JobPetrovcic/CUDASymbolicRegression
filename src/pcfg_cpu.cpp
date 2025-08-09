@@ -1085,3 +1085,149 @@ void prefix_to_postfix_cpu_impl(
         }
     }
 }
+
+void prefix_to_postfix_parent_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> prefix_acc,
+    torch::TensorAccessor<int64_t, 2> postfix_acc,
+    torch::TensorAccessor<int64_t, 2> parents_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix, int64_t M_postfix)
+{
+#pragma omp parallel for
+    for (int b = 0; b < B; ++b)
+    {
+        std::stack<std::vector<int64_t>> s;
+        errors_acc[b] = 0;
+
+        int64_t len = 0;
+        while (len < M_prefix && prefix_acc[b][len] != NO_OP)
+        {
+            len++;
+        }
+
+        for (int j = len - 1; j >= 0; --j)
+        {
+            int64_t token_id = prefix_acc[b][j];
+
+            int arity = get_arity(token_id);
+            if (arity == 0)
+            { // Operand (variable or constant)
+                s.push({token_id});
+            }
+            else if (arity == 1)
+            { // Unary operator
+                if (s.empty())
+                {
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
+                    break;
+                }
+                auto operand = s.top();
+                s.pop();
+
+                std::vector<int64_t> new_expr;
+                new_expr.insert(new_expr.end(), operand.begin(), operand.end());
+                new_expr.push_back(token_id);
+                s.push(new_expr);
+            }
+            else if (arity == 2)
+            { // Binary operator
+                if (s.size() < 2)
+                {
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
+                    break;
+                }
+                auto left_operand = s.top();
+                s.pop();
+                auto right_operand = s.top();
+                s.pop();
+
+                std::vector<int64_t> new_expr;
+                new_expr.insert(new_expr.end(), left_operand.begin(), left_operand.end());
+                new_expr.insert(new_expr.end(), right_operand.begin(), right_operand.end());
+                new_expr.push_back(token_id);
+                s.push(new_expr);
+            }
+        }
+
+        if (errors_acc[b] == 0)
+        {
+            if (s.size() != 1)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION); // Malformed expression
+            }
+            else
+            {
+                auto final_expr = s.top();
+                if (final_expr.size() > M_postfix)
+                {
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_POSTFIX_TOO_LONG); // Postfix expression too long
+                }
+                else
+                {
+                    // Write postfix expression to postfix_acc tensor
+                    for (size_t k = 0; k < final_expr.size(); ++k)
+                    {
+                        postfix_acc[b][k] = final_expr[k];
+                    }
+                    for (size_t k = final_expr.size(); k < M_postfix; ++k)
+                    {
+                        postfix_acc[b][k] = NO_OP; // padding
+                    }
+
+                    // Initialize parents_acc tensor
+                    for (size_t i = 0; i < final_expr.size(); ++i)
+                    {
+                        parents_acc[b][i] = NULL_PARENT;
+                    }
+                    for (size_t i = final_expr.size(); i < M_postfix; ++i)
+                    {
+                        parents_acc[b][i] = NO_OP; // padding
+                    }
+
+                    // Compute parent pointers for the postfix expression
+                    if (final_expr.size() > 0)
+                    {
+                        int32_t node_stack[HARD_MAX_LENGTH];
+                        int32_t node_stack_ptr = 0;
+                        for (size_t i = 0; i < final_expr.size(); i++)
+                        {
+                            int32_t token = final_expr[i];
+                            if (is_unary(token))
+                            {
+                                if (node_stack_ptr < 1)
+                                {
+                                    errors_acc[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_UNARY_OP_MISSING_OPERAND);
+                                    break;
+                                }
+                                int32_t child_index = node_stack[--node_stack_ptr];
+                                parents_acc[b][child_index] = i;
+                            }
+                            else if (is_binary(token))
+                            {
+                                if (node_stack_ptr < 2)
+                                {
+                                    errors_acc[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_BINARY_OP_MISSING_OPERANDS);
+                                    break;
+                                }
+                                int32_t right_child_index = node_stack[--node_stack_ptr];
+                                int32_t left_child_index = node_stack[--node_stack_ptr];
+                                parents_acc[b][right_child_index] = i;
+                                parents_acc[b][left_child_index] = i;
+                            }
+                            if (node_stack_ptr >= HARD_MAX_LENGTH)
+                            {
+                                errors_acc[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_CHILD_STACK_OVERFLOW);
+                                break;
+                            }
+                            node_stack[node_stack_ptr++] = i;
+                        }
+                        if (errors_acc[b] == 0 && final_expr.size() > 0 && node_stack_ptr != 1)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION); // Malformed expression
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

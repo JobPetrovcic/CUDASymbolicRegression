@@ -1353,3 +1353,35 @@ void prefix_to_postfix_cuda_impl(
     prefix_to_postfix_kernel<<<blocks, threads>>>(
         prefix_acc, postfix_acc, errors_acc, B, M_prefix, M_postfix);
 }
+
+void prefix_to_postfix_parent_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> parents_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix, int64_t M_postfix)
+{
+    // For now, fall back to CPU implementation
+    // Convert packed accessors to regular accessors by moving to CPU
+    auto prefix_cpu = torch::empty({B, M_prefix}, torch::kInt64).cpu();
+    auto postfix_cpu = torch::empty({B, M_postfix}, torch::kInt64).cpu();
+    auto parents_cpu = torch::empty({B, M_postfix}, torch::kInt64).cpu();
+    auto errors_cpu = torch::empty({B}, torch::kInt64).cpu();
+
+    // Copy data from GPU to CPU
+    cudaMemcpy(prefix_cpu.data_ptr(), prefix_acc.data(), B * M_prefix * sizeof(int64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(errors_cpu.data_ptr(), errors_acc.data(), B * sizeof(int64_t), cudaMemcpyDeviceToHost);
+
+    // Call CPU implementation
+    prefix_to_postfix_parent_cpu_impl(
+        prefix_cpu.accessor<int64_t, 2>(),
+        postfix_cpu.accessor<int64_t, 2>(),
+        parents_cpu.accessor<int64_t, 2>(),
+        errors_cpu.accessor<int64_t, 1>(),
+        B, M_prefix, M_postfix);
+
+    // Copy results back to GPU
+    cudaMemcpy(postfix_acc.data(), postfix_cpu.data_ptr(), B * M_postfix * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(parents_acc.data(), parents_cpu.data_ptr(), B * M_postfix * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(errors_acc.data(), errors_cpu.data_ptr(), B * sizeof(int64_t), cudaMemcpyHostToDevice);
+}

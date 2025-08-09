@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """
-Comprehensive test suite for the prefix_to_postfix conversion functionality.
+Comprehensive test suite for the prefix_to_post        # Test: op 2 3 -> 2 3 op
+        prefix_expr = [op_id, two_id, three_id, no_op, no_op]
+        expected_postfix = [two_id, three_id, op_id, no_op, no_op]
+        
+        prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
+        expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
+        
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
+        
+        assert torch.equal(postfix_result, expected_tensor), \
+            f"Failed for {operator_symbol}: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
+        
+        # Check that parents tensor has the correct shape
+        assert parents_result.shape == postfix_result.shape, \
+            f"Parents tensor shape {parents_result.shape} doesn't match postfix shape {postfix_result.shape}"conversion functionality.
 Tests individual operators, batching, and both CPU and CUDA implementations.
 """
 
@@ -79,10 +93,10 @@ class TestBinaryOperators:
         prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
         expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(prefix_tensor, 5)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
         
-        assert torch.equal(result, expected_tensor), \
-            f"Failed for {operator_symbol}: expected {expected_postfix}, got {result.tolist()[0]}"
+        assert torch.equal(postfix_result, expected_tensor), \
+            f"Failed for {operator_symbol}: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
     
     def test_binary_operators_batch(self, device: torch.device):
         """Test all binary operators together in a batch."""
@@ -117,10 +131,14 @@ class TestBinaryOperators:
         batch_tensor = torch.tensor(expressions, dtype=torch.long, device=device)
         expected_tensor = torch.tensor(expected_results, dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(batch_tensor, 5)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(batch_tensor)
         
-        assert torch.equal(result, expected_tensor), \
+        assert torch.equal(postfix_result, expected_tensor), \
             f"Batch binary operators test failed"
+        
+        # Check that parents tensor has the correct shape
+        assert parents_result.shape == postfix_result.shape, \
+            f"Parents tensor shape {parents_result.shape} doesn't match postfix shape {postfix_result.shape}"
 
 
 class TestUnaryOperators:
@@ -154,10 +172,14 @@ class TestUnaryOperators:
         prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
         expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(prefix_tensor, 4)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
         
-        assert torch.equal(result, expected_tensor), \
-            f"Failed for {operator_symbol}: expected {expected_postfix}, got {result.tolist()[0]}"
+        assert torch.equal(postfix_result, expected_tensor), \
+            f"Failed for {operator_symbol}: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
+        
+        # Check that parents tensor has the correct shape
+        assert parents_result.shape == postfix_result.shape, \
+            f"Parents tensor shape {parents_result.shape} doesn't match postfix shape {postfix_result.shape}"
     
     def test_unary_operators_batch(self, device: torch.device):
         """Test multiple unary operators together in a batch."""
@@ -181,9 +203,9 @@ class TestUnaryOperators:
         batch_tensor = torch.tensor(expressions, dtype=torch.long, device=device)
         expected_tensor = torch.tensor(expected_results, dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(batch_tensor, 4)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(batch_tensor)
         
-        assert torch.equal(result, expected_tensor), \
+        assert torch.equal(postfix_result, expected_tensor), \
             f"Batch unary operators test failed"
 
 
@@ -219,10 +241,10 @@ class TestVariablesAndConstants:
             prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
             expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
             
-            result = pcfg.prefix_to_postfix(prefix_tensor, 5)
+            postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
             
-            assert torch.equal(result, expected_tensor), \
-                f"Failed for {description}: expected {expected_postfix}, got {result.tolist()[0]}"
+            assert torch.equal(postfix_result, expected_tensor), \
+                f"Failed for {description}: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
     
     def test_constants(self, device: torch.device):
         """Test expressions with different constants."""
@@ -253,10 +275,10 @@ class TestVariablesAndConstants:
             prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
             expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
             
-            result = pcfg.prefix_to_postfix(prefix_tensor, 5)
+            postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
             
-            assert torch.equal(result, expected_tensor), \
-                f"Failed for {description}: expected {expected_postfix}, got {result.tolist()[0]}"
+            assert torch.equal(postfix_result, expected_tensor), \
+                f"Failed for {description}: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
 
 
 class TestComplexExpressions:
@@ -282,10 +304,10 @@ class TestComplexExpressions:
         prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
         expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(prefix_tensor, 8)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
         
-        assert torch.equal(result, expected_tensor), \
-            f"Failed for nested binary: expected {expected_postfix}, got {result.tolist()[0]}"
+        assert torch.equal(postfix_result, expected_tensor), \
+            f"Failed for nested binary: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
     
     def test_nested_unary_operations(self, device: torch.device):
         """Test nested unary operations."""
@@ -305,10 +327,10 @@ class TestComplexExpressions:
         prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
         expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(prefix_tensor, 6)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
         
-        assert torch.equal(result, expected_tensor), \
-            f"Failed for nested unary: expected {expected_postfix}, got {result.tolist()[0]}"
+        assert torch.equal(postfix_result, expected_tensor), \
+            f"Failed for nested unary: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
     
     def test_mixed_operations(self, device: torch.device):
         """Test mixed unary and binary operations."""
@@ -331,10 +353,10 @@ class TestComplexExpressions:
         prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
         expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(prefix_tensor, 10)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
         
-        assert torch.equal(result, expected_tensor), \
-            f"Failed for mixed operations: expected {expected_postfix}, got {result.tolist()[0]}"
+        assert torch.equal(postfix_result, expected_tensor), \
+            f"Failed for mixed operations: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
 
 
 class TestBatchProcessing:
@@ -366,21 +388,21 @@ class TestBatchProcessing:
         max_len = 8
         
         # Convert individually
-        individual_results = []
+        individual_results : List[torch.Tensor] = []
         for expr in test_expressions:
             single_tensor = torch.tensor([expr], dtype=torch.long, device=device)
-            result = pcfg.prefix_to_postfix(single_tensor, max_len)
-            individual_results.append(result[0])
+            postfix_result, parents_result = pcfg.prefix_to_postfix_parent(single_tensor, max_len)
+            individual_results.append(postfix_result)
         
         # Convert as batch
         batch_tensor = torch.tensor(test_expressions, dtype=torch.long, device=device)
-        batch_result = pcfg.prefix_to_postfix(batch_tensor, max_len)
+        postfix_batch_result, parents_batch_postfix_result = pcfg.prefix_to_postfix_parent(batch_tensor, max_len)
         
         # Compare results
         for i, individual_result in enumerate(individual_results):
-            assert torch.equal(batch_result[i], individual_result), \
+            assert torch.equal(postfix_batch_result[i], individual_result[0]), \
                 f"Batch result differs from individual result for expression {i}: " \
-                f"batch={batch_result[i].tolist()}, individual={individual_result.tolist()}"
+                f"batch={postfix_batch_result[i].tolist()}, individual={individual_result[0].tolist()}"
     
     def test_large_batch(self, device: torch.device):
         """Test processing of large batches."""
@@ -418,9 +440,9 @@ class TestBatchProcessing:
         batch_tensor = torch.tensor(expressions, dtype=torch.long, device=device)
         expected_tensor = torch.tensor(expected_results, dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(batch_tensor, 6)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(batch_tensor)
         
-        assert torch.equal(result, expected_tensor), \
+        assert torch.equal(postfix_result, expected_tensor), \
             f"Large batch processing failed"
     
     def test_mixed_length_batch(self, device: torch.device):
@@ -451,9 +473,9 @@ class TestBatchProcessing:
         batch_tensor = torch.tensor(expressions, dtype=torch.long, device=device)
         expected_tensor = torch.tensor(expected_results, dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(batch_tensor, max_len)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(batch_tensor, max_len)
         
-        assert torch.equal(result, expected_tensor), \
+        assert torch.equal(postfix_result, expected_tensor), \
             f"Mixed length batch processing failed"
 
 
@@ -493,17 +515,20 @@ class TestDeviceConsistency:
         for expr in test_expressions:
             # CPU conversion
             cpu_tensor = torch.tensor([expr], dtype=torch.long, device="cpu")
-            cpu_result = cpu_pcfg.prefix_to_postfix(cpu_tensor, max_len)
+            cpu_postfix_result, cpu_parents_result = cpu_pcfg.prefix_to_postfix_parent(cpu_tensor, max_len)
             
             # CUDA conversion
             cuda_tensor = torch.tensor([expr], dtype=torch.long, device=f"cuda:{cuda_index}")
-            cuda_result = cuda_pcfg.prefix_to_postfix(cuda_tensor, max_len)
+            cuda_postfix_result, cuda_parents_result = cuda_pcfg.prefix_to_postfix_parent(cuda_tensor, max_len)
             
             # Compare results
-            assert torch.equal(cpu_result, cuda_result.cpu()), \
+            assert torch.equal(cpu_postfix_result, cuda_postfix_result.cpu()), \
                 f"CPU and CUDA results differ for expression {expr}: " \
-                f"CPU={cpu_result.tolist()}, CUDA={cuda_result.cpu().tolist()}"
-    
+                f"CPU={cpu_postfix_result.tolist()}, CUDA={cuda_postfix_result.cpu().tolist()}"
+            assert torch.equal(cpu_parents_result, cuda_parents_result.cpu()), \
+                f"CPU and CUDA parents results differ for expression {expr}: " \
+                f"CPU={cpu_parents_result.tolist()}, CUDA={cuda_parents_result.cpu().tolist()}"
+
     def test_cpu_cuda_batch_expressions(self):
         """Test that CPU and CUDA produce identical results for batch expressions."""
         if not torch.cuda.is_available():
@@ -540,16 +565,19 @@ class TestDeviceConsistency:
         
         # CPU conversion
         cpu_tensor = torch.tensor(test_expressions, dtype=torch.long, device="cpu")
-        cpu_result = cpu_pcfg.prefix_to_postfix(cpu_tensor, max_len)
+        cpu_postfix_result, cpu_parents_result = cpu_pcfg.prefix_to_postfix_parent(cpu_tensor, max_len)
         
         # CUDA conversion
         cuda_tensor = torch.tensor(test_expressions, dtype=torch.long, device=f"cuda:{cuda_index}")
-        cuda_result = cuda_pcfg.prefix_to_postfix(cuda_tensor, max_len)
+        cuda_postfix_result, cuda_parents_result = cuda_pcfg.prefix_to_postfix_parent(cuda_tensor, max_len)
         
         # Compare results
-        assert torch.equal(cpu_result, cuda_result.cpu()), \
+        assert torch.equal(cpu_postfix_result, cuda_postfix_result.cpu()), \
             f"CPU and CUDA batch results differ: " \
-            f"CPU={cpu_result.tolist()}, CUDA={cuda_result.cpu().tolist()}"
+            f"CPU={cpu_postfix_result.tolist()}, CUDA={cuda_postfix_result.cpu().tolist()}"
+        assert torch.equal(cpu_parents_result, cuda_parents_result.cpu()), \
+            f"CPU and CUDA parents results differ: " \
+            f"CPU={cpu_parents_result.tolist()}, CUDA={cuda_parents_result.cpu().tolist()}"
 
 
 class TestEdgeCases:
@@ -574,10 +602,10 @@ class TestEdgeCases:
             prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
             expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
             
-            result = pcfg.prefix_to_postfix(prefix_tensor, 3)
+            postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
             
-            assert torch.equal(result, expected_tensor), \
-                f"Single operand test failed for {description}: expected {expected_postfix}, got {result.tolist()[0]}"
+            assert torch.equal(postfix_result, expected_tensor), \
+                f"Single operand test failed for {description}: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
     
     def test_extensive_padding(self, device: torch.device):
         """Test expressions with extensive padding."""
@@ -598,10 +626,10 @@ class TestEdgeCases:
         prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
         expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
         
-        result = pcfg.prefix_to_postfix(prefix_tensor, max_len)
+        postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor, max_len)
         
-        assert torch.equal(result, expected_tensor), \
-            f"Extensive padding test failed: expected {expected_postfix}, got {result.tolist()[0]}"
+        assert torch.equal(postfix_result, expected_tensor), \
+            f"Extensive padding test failed: expected {expected_postfix}, got {postfix_result.tolist()[0]}"
     
     def test_all_operators_comprehensive(self, device: torch.device):
         """Test that all operators work correctly."""
@@ -623,9 +651,9 @@ class TestEdgeCases:
             prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
             expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
             
-            result = pcfg.prefix_to_postfix(prefix_tensor, 5)
+            postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
             
-            assert torch.equal(result, expected_tensor), \
+            assert torch.equal(postfix_result, expected_tensor), \
                 f"Comprehensive test failed for binary operator {op_symbol}"
         
         # Test all unary operators that are in the grammar
@@ -643,9 +671,9 @@ class TestEdgeCases:
             prefix_tensor = torch.tensor([prefix_expr], dtype=torch.long, device=device)
             expected_tensor = torch.tensor([expected_postfix], dtype=torch.long, device=device)
             
-            result = pcfg.prefix_to_postfix(prefix_tensor, 4)
+            postfix_result, parents_result = pcfg.prefix_to_postfix_parent(prefix_tensor)
             
-            assert torch.equal(result, expected_tensor), \
+            assert torch.equal(postfix_result, expected_tensor), \
                 f"Comprehensive test failed for unary operator {op_symbol}"
 
 

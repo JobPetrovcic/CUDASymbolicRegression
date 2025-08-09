@@ -160,3 +160,17 @@ void prefix_to_postfix_cuda_impl(
     torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
     torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
     int64_t B, int64_t M_prefix, int64_t M_postfix);
+
+void prefix_to_postfix_parent_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> prefix_acc,
+    torch::TensorAccessor<int64_t, 2> postfix_acc,
+    torch::TensorAccessor<int64_t, 2> parents_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix, int64_t M_postfix);
+
+void prefix_to_postfix_parent_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> parents_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix, int64_t M_postfix);

@@ -47,7 +47,7 @@ public:
 
     torch::Tensor postfix_to_infix(torch::Tensor expressions, int64_t max_infix_len, int verbosity = 0);
     torch::Tensor prefix_to_infix(torch::Tensor expressions, int64_t max_infix_len, int verbosity = 0);
-    torch::Tensor prefix_to_postfix(torch::Tensor expressions, int64_t max_postfix_len, int verbosity = 0);
+    std::tuple<torch::Tensor, torch::Tensor> prefix_to_postfix_parent(torch::Tensor expressions, int verbosity = 0);
 
     torch::Device device;
 
