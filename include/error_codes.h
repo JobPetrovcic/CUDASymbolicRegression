@@ -45,6 +45,7 @@ enum class ErrorCode : int64_t
     PARSING_TREE_BINARY_OP_MISSING_OPERANDS = 405, // During tree construction, a binary operator was found with fewer than two operands.
     PARSING_TREE_CHILD_STACK_OVERFLOW = 406,       // The stack for building child/parent pointers overflowed during tree construction.
     PARSING_TREE_MALFORMED_EXPRESSION = 407,       // Generic error for expressions that are syntactically incorrect (e.g., too many operands left on the stack after tree construction).
+    PARSING_UNEXPECTED_TOKEN = 408,                // An unexpected token was encountered during parsing (e.g., an operator without operands).
 
     // --- Postfix/Prefix-to-Infix Conversion Errors (from postfix_to_infix/prefix_to_infix) ---
     CONVERSION_ERROR_START = 500,
@@ -54,7 +55,8 @@ enum class ErrorCode : int64_t
     CONVERSION_UNARY_OP_MISSING_OPERAND = 504,   // Malformed input: a unary operator was found without an operand on the stack.
     CONVERSION_BINARY_OP_MISSING_OPERANDS = 505, // Malformed input: a binary operator was found with fewer than two operands on the stack.
     CONVERSION_MALFORMED_EXPRESSION = 506,       // Malformed input: e.g., too many items left on the stack at the end of conversion.
-
+    CONVERSION_MULTIPLE_ROOTS = 507,             // Conversion resulted in multiple roots in the infix expression, which is not allowed.
+    CONVERSION_UNEXPECTED_TOKEN = 508,           // An unexpected token was encountered during conversion (e.g., an operator without operands).
 };
 
 /**
@@ -139,6 +141,9 @@ inline std::string getErrorMessage(ErrorCode code, const std::string &context = 
     case ErrorCode::PARSING_TREE_MALFORMED_EXPRESSION:
         base_message = "Parsing failed: Malformed expression (e.g., too many operands).";
         break;
+    case ErrorCode::PARSING_UNEXPECTED_TOKEN:
+        base_message = "Parsing failed: Unexpected token encountered during parsing.";
+        break;
 
     // --- Conversion ---
     case ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG:
@@ -158,6 +163,12 @@ inline std::string getErrorMessage(ErrorCode code, const std::string &context = 
         break;
     case ErrorCode::CONVERSION_MALFORMED_EXPRESSION:
         base_message = "Conversion failed: Malformed input (e.g., too many operands).";
+        break;
+    case ErrorCode::CONVERSION_MULTIPLE_ROOTS:
+        base_message = "Conversion failed: Resulting infix expression has multiple roots, which is not allowed.";
+        break;
+    case ErrorCode::CONVERSION_UNEXPECTED_TOKEN:
+        base_message = "Conversion failed: Unexpected token encountered (e.g., an operator without operands).";
         break;
 
     // --- Default ---

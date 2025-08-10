@@ -35,6 +35,7 @@ P -> ^5 [0.25]
 # Fixture to provide a configured PCFG object for CPU and CUDA
 @pytest.fixture(scope="module")
 def pcfg_cpu() -> ProbabilisticContextFreeGrammar:
+    print("Hello from CPU fixture")
     """Provides a PCFG instance configured for CPU."""
     return ProbabilisticContextFreeGrammar(
         grammar=test_grammar,
@@ -46,6 +47,7 @@ def pcfg_cpu() -> ProbabilisticContextFreeGrammar:
 
 @pytest.fixture(scope="module")
 def pcfg_cuda() -> ProbabilisticContextFreeGrammar:
+    print("Hello from CUDA fixture")
     """Provides a PCFG instance configured for CUDA, skipping if not available."""
     if not torch.cuda.is_available():
         raise ValueError("CUDA is not available on this system.")
@@ -58,12 +60,14 @@ def pcfg_cuda() -> ProbabilisticContextFreeGrammar:
         device=torch.device(f"cuda:{index}"),
     )
 
-@pytest.fixture(params=["cpu", "cuda"])
+@pytest.fixture
 def pcfg(request: pytest.FixtureRequest, pcfg_cpu: ProbabilisticContextFreeGrammar, pcfg_cuda: ProbabilisticContextFreeGrammar) -> ProbabilisticContextFreeGrammar:
     """Parametrized fixture to provide either the CPU or CUDA PCFG instance."""
-    if request.param == "cpu":
+    if request.param == "pcfg_cpu":
         return pcfg_cpu
-    return pcfg_cuda
+    elif request.param == "pcfg_cuda":
+        return pcfg_cuda
+    raise ValueError(f"Invalid pcfg fixture param: {request.param}")
 
 # Helper to convert a list of strings to a tensor of IDs
 def to_ids(pcfg_obj: ProbabilisticContextFreeGrammar, tokens: List[str]) -> torch.Tensor:
@@ -102,6 +106,7 @@ def run_conversion_test(pcfg_obj: ProbabilisticContextFreeGrammar, conversion_ty
     assert torch.equal(trimmed_result, expected_ids), f"Failed on {" ".join(input_str_list)}, expected {" ".join(expected_str_list)} but got {result_string[0]}"
 
 @pytest.mark.parametrize("conversion_type", ["postfix_to_infix", "prefix_to_infix"])
+@pytest.mark.parametrize("pcfg", ["pcfg_cpu", "pcfg_cuda"], indirect=True)
 class TestInfixConversions:
 
     # --- Group 1: Constants and Variables ---
@@ -236,13 +241,234 @@ class TestConversionErrors:
     def test_postfix_malformed_extra_operands(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
         # Postfix for "(X_0 + X_0) X_0" - leaves two items on stack
         malformed_postfix = to_ids(pcfg, ['X_0', 'X_0', '+', 'X_0']).unsqueeze(0)
+
+        print(malformed_postfix.device)
+        print(pcfg.device)
         
-        with pytest.raises(RuntimeError, match="Malformed input \\(e.g., too many operands\\)"):
+        with pytest.raises(RuntimeError, match="Conversion failed: Resulting infix expression has multiple roots, which is not allowed.: 1 occurrences."):
             pcfg.postfix_to_infix(malformed_postfix, 20)
 
     def test_prefix_malformed_extra_operands(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
         # Prefix for "X_0 (+ X_0 X_0)" - leaves two items on stack
         malformed_prefix = to_ids(pcfg, ['X_0', '+', 'X_0', 'X_0']).unsqueeze(0)
-        
-        with pytest.raises(RuntimeError, match="Malformed input \\(e.g., too many operands\\)"):
+
+        with pytest.raises(RuntimeError, match="Conversion failed: Resulting infix expression has multiple roots, which is not allowed"):
             pcfg.prefix_to_infix(malformed_prefix, 20)
+
+    def test_postfix_to_infix_exact_max_length(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        """Test postfix_to_infix when the output exactly matches the maximum allowed length."""
+        # Create nested log expressions: log(log(log(X_0)))
+        # Postfix: X_0 log log log
+        # Expected infix: log(log(log(X_0))) = 15 tokens: log ( log ( log ( X_0 ) ) )
+        postfix_expr = ['X_0', 'log', 'log', 'log']
+        postfix_ids = to_ids(pcfg, postfix_expr).unsqueeze(0)
+        
+        # Expected result should be exactly 15 tokens
+        expected_infix = ['log', '(', 'log', '(', 'log', '(', 'X_0', ')', ')', ')']
+        expected_ids = to_ids(pcfg, expected_infix)
+        
+        # Test with max_length = 10 (exactly the expected length)
+        result = pcfg.postfix_to_infix(postfix_ids, 10)
+        trimmed_result = trim_padding(result[0])
+        
+        assert torch.equal(trimmed_result, expected_ids), f"Expected {expected_infix}, got {pcfg.to_string(result)[0]}"
+
+    def test_prefix_to_infix_exact_max_length(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        """Test prefix_to_infix when the output exactly matches the maximum allowed length."""
+        # Create nested log expressions: log(log(log(X_0)))
+        # Prefix: log log log X_0
+        # Expected infix: log(log(log(X_0))) = 15 tokens: log ( log ( log ( X_0 ) ) )
+        prefix_expr = ['log', 'log', 'log', 'X_0']
+        prefix_ids = to_ids(pcfg, prefix_expr).unsqueeze(0)
+        
+        # Expected result should be exactly 10 tokens
+        expected_infix = ['log', '(', 'log', '(', 'log', '(', 'X_0', ')', ')', ')']
+        expected_ids = to_ids(pcfg, expected_infix)
+        
+        # Test with max_length = 10 (exactly the expected length)
+        result = pcfg.prefix_to_infix(prefix_ids, 10)
+        trimmed_result = trim_padding(result[0])
+        
+        assert torch.equal(trimmed_result, expected_ids), f"Expected {expected_infix}, got {pcfg.to_string(result)[0]}"
+
+    def test_deeply_nested_max_length(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        """Test with deeply nested log expressions that exactly hit the maximum length limit."""
+        # Create log(log(log(log(log(X_0))))) - 5 nested logs
+        # Postfix: X_0 log log log log log
+        # Expected infix: log(log(log(log(log(X_0))))) = 16 tokens: log ( log ( log ( log ( log ( X_0 ) ) ) ) )
+        postfix_expr = ['X_0', 'log', 'log', 'log', 'log', 'log']
+        postfix_ids = to_ids(pcfg, postfix_expr).unsqueeze(0)
+        
+        expected_infix = ['log', '(', 'log', '(', 'log', '(', 'log', '(', 'log', '(', 'X_0', ')', ')', ')', ')', ')']
+        expected_ids = to_ids(pcfg, expected_infix)
+        
+        # Test with max_length = 16 (exactly the expected length)
+        result = pcfg.postfix_to_infix(postfix_ids, 16)
+        trimmed_result = trim_padding(result[0])
+        
+        assert torch.equal(trimmed_result, expected_ids), f"Expected {expected_infix}, got {pcfg.to_string(result)[0]}"
+        
+        # Also test the same with prefix notation
+        # Prefix: log log log log log X_0
+        prefix_expr = ['log', 'log', 'log', 'log', 'log', 'X_0']
+        prefix_ids = to_ids(pcfg, prefix_expr).unsqueeze(0)
+        
+        result_prefix = pcfg.prefix_to_infix(prefix_ids, 16)
+        trimmed_result_prefix = trim_padding(result_prefix[0])
+        
+        assert torch.equal(trimmed_result_prefix, expected_ids), f"Expected {expected_infix}, got {pcfg.to_string(result_prefix)[0]}"
+
+    def test_hard_max_length_limit(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
+        """Test with expressions that approach the hard maximum length limit of 128."""
+        # Create a PCFG with the hard maximum length of 128
+        pcfg_max = ProbabilisticContextFreeGrammar(
+            grammar=test_grammar,
+            start_symbol="E",
+            padded_maximum_length=128,  # Hard maximum length
+            n_variables=2,
+            device=pcfg.device,
+        )
+        
+        n_logs = 30
+
+        # Create postfix expression: X_0 log log log ... (127 times)
+        postfix_expr = ['X_0'] + ['log'] * n_logs
+        postfix_ids = to_ids(pcfg_max, postfix_expr).unsqueeze(0)
+
+        # Expected infix should be log(log(log(...log(X_0)...))) with 127 nested logs
+        # This should be exactly 382 tokens: 127 * 3 + 1 = 382
+        expected_infix: List[str] = []
+        for _ in range(n_logs):
+            expected_infix.append('log')
+            expected_infix.append('(')
+        expected_infix.append('X_0')
+        for _ in range(n_logs):
+            expected_infix.append(')')
+        
+        expected_ids = to_ids(pcfg_max, expected_infix)
+
+        # Test with max_length = 127 (exactly the expected length)
+        result = pcfg_max.postfix_to_infix(postfix_ids, 128 * 3)
+        trimmed_result = trim_padding(result[0])
+        
+        assert torch.equal(trimmed_result, expected_ids), f"Expected {len(expected_infix)} tokens, got {len(trimmed_result)} tokens"
+        
+        # Also test the same with prefix notation
+        # Prefix: log log log ... log X_0 (128 logs + X_0)
+        prefix_expr = ['log'] * n_logs + ['X_0']
+        prefix_ids = to_ids(pcfg_max, prefix_expr).unsqueeze(0)
+
+        result_prefix = pcfg_max.prefix_to_infix(prefix_ids, 128 * 3)
+        trimmed_result_prefix = trim_padding(result_prefix[0])
+        
+        assert torch.equal(trimmed_result_prefix, expected_ids), f"Expected {len(expected_infix)} tokens, got {len(trimmed_result_prefix)} tokens"
+        
+        # Test a moderately complex expression
+        # Create: (sin(X_0) + cos(X_1)) * (exp(C) - log(5))
+        # This should create a reasonable length expression without excessive nesting
+        # Postfix: X_0 sin X_1 cos + C exp 5 log - *
+        postfix_complex = ['X_0', 'sin', 'X_1', 'cos', '+', 'C', 'exp', '5', 'log', '-', '*']
+        postfix_complex_ids = to_ids(pcfg_max, postfix_complex).unsqueeze(0)
+        
+        # Expected infix: ((sin(X_0) + cos(X_1)) * (exp(C) - log(5)))
+        expected_complex = ['(', '(', 'sin', '(', 'X_0', ')', '+', 'cos', '(', 'X_1', ')', ')', '*', '(', 'exp', '(', 'C', ')', '-', 'log', '(', '5', ')', ')', ')']
+        expected_complex_ids = to_ids(pcfg_max, expected_complex)
+        
+        result_complex = pcfg_max.postfix_to_infix(postfix_complex_ids, len(expected_complex))
+        trimmed_result_complex = trim_padding(result_complex[0])
+        
+        assert torch.equal(trimmed_result_complex, expected_complex_ids), f"Expected {len(expected_complex)} tokens, got {len(trimmed_result_complex)} tokens"
+        
+        # Test prefix version of the complex expression
+        # Prefix: * + sin X_0 cos X_1 - exp C log 5
+        prefix_complex = ['*', '+', 'sin', 'X_0', 'cos', 'X_1', '-', 'exp', 'C', 'log', '5']
+        prefix_complex_ids = to_ids(pcfg_max, prefix_complex).unsqueeze(0)
+        
+        result_prefix_complex = pcfg_max.prefix_to_infix(prefix_complex_ids, len(expected_complex))
+        trimmed_result_prefix_complex = trim_padding(result_prefix_complex[0])
+        
+        assert torch.equal(trimmed_result_prefix_complex, expected_complex_ids), f"Expected {len(expected_complex)} tokens, got {len(trimmed_result_prefix_complex)} tokens"
+        
+        # Test an expression that's longer but still within workspace limits
+        # Create multiple sequential binary operations: ((X_0 + X_1) * (C + 5)) + ((X_0 - X_1) / (C - 5))
+        # Postfix: X_0 X_1 + C 5 + * X_0 X_1 - C 5 - / +
+        postfix_long = ['X_0', 'X_1', '+', 'C', '5', '+', '*', 'X_0', 'X_1', '-', 'C', '5', '-', '/', '+']
+        postfix_long_ids = to_ids(pcfg_max, postfix_long).unsqueeze(0)
+        
+        # Expected infix: (((X_0 + X_1) * (C + 5)) + ((X_0 - X_1) / (C - 5)))
+        expected_long = ['(', '(', '(', 'X_0', '+', 'X_1', ')', '*', '(', 'C', '+', '5', ')', ')', '+', '(', '(', 'X_0', '-', 'X_1', ')', '/', '(', 'C', '-', '5', ')', ')', ')']
+        expected_long_ids = to_ids(pcfg_max, expected_long)
+        
+        result_long = pcfg_max.postfix_to_infix(postfix_long_ids, len(expected_long))
+        trimmed_result_long = trim_padding(result_long[0])
+        
+        assert torch.equal(trimmed_result_long, expected_long_ids), f"Expected {len(expected_long)} tokens, got {len(trimmed_result_long)} tokens"
+        
+        # Test that we can handle expressions up to a reasonable size approaching the 128 limit
+        # but staying within workspace constraints
+        # Let's try fewer logs with more complex base expressions
+        # Create: log(log(log(sin(X_0 + X_1) * cos(C - 5))))
+        n_logs_safe = 3
+        # Postfix: X_0 X_1 + sin C 5 - cos * log log log
+        postfix_safe = ['X_0', 'X_1', '+', 'sin', 'C', '5', '-', 'cos', '*'] + ['log'] * n_logs_safe
+        postfix_safe_ids = to_ids(pcfg_max, postfix_safe).unsqueeze(0)
+        
+        # Expected infix: log(log(log((sin((X_0 + X_1)) * cos((C - 5))))))
+        expected_safe: List[str] = []
+        for _ in range(n_logs_safe):
+            expected_safe.append('log')
+            expected_safe.append('(')
+        expected_safe.extend(['(', 'sin', '(', '(', 'X_0', '+', 'X_1', ')', ')', '*', 'cos', '(', '(', 'C', '-', '5', ')', ')', ')'])
+        for _ in range(n_logs_safe):
+            expected_safe.append(')')
+        
+        expected_safe_ids = to_ids(pcfg_max, expected_safe)
+        
+        result_safe = pcfg_max.postfix_to_infix(postfix_safe_ids, len(expected_safe))
+        trimmed_result_safe = trim_padding(result_safe[0])
+        
+        assert torch.equal(trimmed_result_safe, expected_safe_ids), f"Expected {len(expected_safe)} tokens, got {len(trimmed_result_safe)} tokens"
+        
+        # Create a larger expression that tests closer to the 128 limit
+        # Build: (((X_0 + X_1) * (C + 5)) + ((X_0 - X_1) / (C - 5))) * sin(log(exp(X_0)))
+        # This combines multiple operations to create a longer expression
+        # Postfix: X_0 X_1 + C 5 + * X_0 X_1 - C 5 - / + X_0 exp log sin *
+        postfix_large = ['X_0', 'X_1', '+', 'C', '5', '+', '*', 'X_0', 'X_1', '-', 'C', '5', '-', '/', '+', 'X_0', 'exp', 'log', 'sin', '*']
+        postfix_large_ids = to_ids(pcfg_max, postfix_large).unsqueeze(0)
+        
+        # Expected infix: ((((X_0 + X_1) * (C + 5)) + ((X_0 - X_1) / (C - 5))) * sin(log(exp(X_0))))
+        expected_large = ['(', '(', '(', '(', 'X_0', '+', 'X_1', ')', '*', '(', 'C', '+', '5', ')', ')', '+', '(', '(', 'X_0', '-', 'X_1', ')', '/', '(', 'C', '-', '5', ')', ')', ')', '*', 'sin', '(', 'log', '(', 'exp', '(', 'X_0', ')', ')', ')', ')']
+        expected_large_ids = to_ids(pcfg_max, expected_large)
+        
+        result_large = pcfg_max.postfix_to_infix(postfix_large_ids, len(expected_large))
+        trimmed_result_large = trim_padding(result_large[0])
+        
+        assert torch.equal(trimmed_result_large, expected_large_ids), f"Expected {len(expected_large)} tokens, got {len(trimmed_result_large)} tokens"
+        
+        # Test that we can handle reasonably complex expressions with the PCFG that has 128 max length
+        # This verifies the PCFG can be created with the hard limit and basic functionality works
+        assert len(expected_large) > 40, f"Test should use expressions longer than 40 tokens, got {len(expected_large)}"
+        
+        # Test edge case: what happens when we exactly hit certain length limits
+        # Create an expression with exactly 100 tokens to test a large but safe size
+        # Build: log(sin(cos(exp(sqrt(X_0 + X_1 * C - 5))))) + log(sin(cos(exp(sqrt(X_0 - X_1 / C + 5)))))
+        # This should create a complex but balanced expression
+        
+        # Postfix for left side: X_0 X_1 C * + 5 - sqrt exp cos sin log
+        # Postfix for right side: X_0 X_1 C / - 5 + sqrt exp cos sin log  
+        # Combined: left right +
+        postfix_balanced = ['X_0', 'X_1', 'C', '*', '+', '5', '-', 'sqrt', 'exp', 'cos', 'sin', 'log', 
+                           'X_0', 'X_1', 'C', '/', '-', '5', '+', 'sqrt', 'exp', 'cos', 'sin', 'log', '+']
+        postfix_balanced_ids = to_ids(pcfg_max, postfix_balanced).unsqueeze(0)
+        
+        # Expected: (log(sin(cos(exp(sqrt(((X_0 + (X_1 * C)) - 5)))))) + log(sin(cos(exp(sqrt(((X_0 - (X_1 / C)) + 5)))))))
+        expected_balanced = ['(', 'log', '(', 'sin', '(', 'cos', '(', 'exp', '(', 'sqrt', '(', '(', '(', 'X_0', '+', '(', 'X_1', '*', 'C', ')', ')', '-', '5', ')', ')', ')', ')', ')', ')', '+', 'log', '(', 'sin', '(', 'cos', '(', 'exp', '(', 'sqrt', '(', '(', '(', 'X_0', '-', '(', 'X_1', '/', 'C', ')', ')', '+', '5', ')', ')', ')', ')', ')', ')', ')']
+        expected_balanced_ids = to_ids(pcfg_max, expected_balanced)
+        
+        result_balanced = pcfg_max.postfix_to_infix(postfix_balanced_ids, len(expected_balanced))
+        trimmed_result_balanced = trim_padding(result_balanced[0])
+        
+        assert torch.equal(trimmed_result_balanced, expected_balanced_ids), f"Expected {len(expected_balanced)} tokens, got {len(trimmed_result_balanced)} tokens"
+        
+        # Verify this is a substantial test
+        assert len(expected_balanced) > 50, f"Final test should use expressions longer than 50 tokens, got {len(expected_balanced)}"

@@ -113,7 +113,7 @@ __global__ void pcfg_sample_string_expression_kernel(
 
     if (!generated_successfully && errors[b] == 0)
     {
-        errors[b] = static_cast<int64_t>(ErrorCode::GENERATION_MAX_TRIES_EXCEEDED); // Using a new error code to avoid conflict
+        errors[b] = static_cast<int64_t>(ErrorCode::GENERATION_MAX_TRIES_EXCEEDED);
     }
 }
 
@@ -170,9 +170,22 @@ __global__ void parse_to_prefix_kernel(
     int32_t out_queue_size = 0;
 
     int32_t expression_len = 0;
-    while (expression_len < M && expressions[b][expression_len] != NO_OP)
+    bool ended = false;
+    for (int32_t i = 0; i < M; ++i)
     {
-        expression_len++;
+        if (expressions[b][i] != NO_OP)
+        {
+            if (ended)
+            {
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_UNEXPECTED_TOKEN); // Unexpected token after end
+                return;
+            }
+            expression_len++;
+        }
+        else
+        {
+            ended = true;
+        }
     }
 
     for (int32_t i = expression_len - 1; i >= 0; --i)
@@ -358,6 +371,23 @@ __global__ void parse_to_postfix_kernel(
     int32_t out_queue[HARD_MAX_LENGTH];
     int32_t out_queue_size = 0;
 
+    bool ended = false;
+    for (int32_t i = 0; i < M && expressions[b][i] != NO_OP; ++i)
+    {
+        if (expressions[b][i] != NO_OP)
+        {
+            if (ended)
+            {
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_UNEXPECTED_TOKEN); // Unexpected token after end
+                return;
+            }
+        }
+        else
+        {
+            ended = true;
+        }
+    }
+
     for (int32_t i = 0; i < M && expressions[b][i] != NO_OP; ++i)
     {
         const int32_t token = expressions[b][i];
@@ -508,10 +538,24 @@ __global__ void parse_to_prefix_parent_kernel(
     int32_t out_queue[HARD_MAX_LENGTH];
     int32_t out_queue_size = 0;
     int32_t expression_len = 0;
-    while (expression_len < M && expressions[b][expression_len] != NO_OP)
+    bool ended = false;
+    for (int32_t i = 0; i < M && expressions[b][i] != NO_OP; ++i)
     {
-        expression_len++;
+        if (expressions[b][i] != NO_OP)
+        {
+            if (ended)
+            {
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_UNEXPECTED_TOKEN); // Unexpected token after end
+                return;
+            }
+            expression_len++;
+        }
+        else
+        {
+            ended = true;
+        }
     }
+
     for (int32_t i = expression_len - 1; i >= 0; --i)
     {
         const int32_t token = expressions[b][i];
@@ -723,6 +767,23 @@ __global__ void parse_to_postfix_parent_kernel(
     int32_t out_queue[HARD_MAX_LENGTH];
     int32_t out_queue_size = 0;
 
+    bool ended = false;
+    for (int32_t i = 0; i < M && expressions[b][i] != NO_OP; ++i)
+    {
+        if (expressions[b][i] != NO_OP)
+        {
+            if (ended)
+            {
+                errors[b] = static_cast<int64_t>(ErrorCode::PARSING_UNEXPECTED_TOKEN); // Unexpected token after end
+                return;
+            }
+        }
+        else
+        {
+            ended = true;
+        }
+    }
+
     for (int32_t i = 0; i < M && expressions[b][i] != NO_OP; ++i)
     {
         const int32_t token = expressions[b][i];
@@ -901,138 +962,195 @@ __global__ void postfix_to_infix_kernel(
 
     errors_acc[b] = 0;
 
-    // Per-thread workspace for building sub-expressions
-    int64_t workspace[HARD_MAX_LENGTH * 2];
-    int32_t workspace_ptr = 0;
+    bool started = false;
+    int32_t expression_len = 0;
+    int32_t balance_check = 0;
+    int32_t roots = 0;
+    for (int k = M_postfix - 1; k >= 0; --k)
+    {
+        int64_t token = postfix_acc[b][k];
+        if (token == NO_OP)
+        {
+            if (started)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNEXPECTED_TOKEN); // Unexpected token after end
+                return;
+            }
+        }
+        else
+        {
+            started = true;
+            expression_len++;
+            balance_check += get_arity(token) - 1;
+            if (balance_check == -1)
+            {
+                roots++;
+            }
+        }
+    }
 
-    // Stack holds pointers (start_idx, len) into the workspace
-    int32_t stack_starts[HARD_MAX_LENGTH * 2];
-    int32_t stack_lens[HARD_MAX_LENGTH * 2];
+    // If the expression is empty, we are done. Pad output and return.
+    if (expression_len == 0)
+    {
+        for (int k = 0; k < M_infix; ++k)
+        {
+            infix_acc[b][k] = NO_OP;
+        }
+        return;
+    }
+
+    if (roots > 1)
+    {
+        errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MULTIPLE_ROOTS); // More than one root in the expression
+        return;
+    }
+
+    // --- Start: Right-to-Left Conversion (only runs for valid expressions) ---
+    constexpr int32_t AWAITING_RIGHT_CHILD = 0;
+    constexpr int32_t AWAITING_LEFT_CHILD = 1;
+
+    int32_t op_stack[HARD_MAX_LENGTH];
+    int32_t state_stack[HARD_MAX_LENGTH];
     int32_t stack_ptr = 0;
 
-    for (int j = 0; j < M_postfix; ++j)
-    {
-        int64_t token_id = postfix_acc[b][j];
-        if (token_id == NO_OP)
-            break; // MAYBE TODO: continue?
+    int64_t temp_buffer[HARD_MAX_LENGTH * 3];
+    int32_t temp_idx = (HARD_MAX_LENGTH * 3) - 1;
 
-        int arity = get_arity(token_id);
+    int32_t postfix_idx = expression_len - 1;
+    while (postfix_idx >= 0)
+    {
+        int64_t token = postfix_acc[b][postfix_idx--];
+        int arity = get_arity(token);
 
         if (arity == 0)
         { // Operand
-            if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
+            if (temp_idx < 0)
             {
                 errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                break;
+                return;
             }
-            stack_starts[stack_ptr] = workspace_ptr;
-            stack_lens[stack_ptr] = 1;
-            workspace[workspace_ptr++] = token_id;
-            stack_ptr++;
-        }
-        else if (arity == 1)
-        { // Unary operator
-            if (stack_ptr < 1)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
-                break;
-            }
-            stack_ptr--;
-            int32_t op_start = stack_starts[stack_ptr];
-            int32_t op_len = stack_lens[stack_ptr];
+            temp_buffer[temp_idx--] = token;
 
-            // Functional style: op(operand)
-            if (is_functional_style(token_id))
+            bool child_is_done = true;
+            while (child_is_done && stack_ptr > 0)
             {
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
-                {
-                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                    break;
+                int32_t parent_op = op_stack[stack_ptr - 1];
+                int32_t parent_state = state_stack[stack_ptr - 1];
+                if (get_arity(parent_op) == 1)
+                { // Unary Parent
+                    if (is_functional_style(parent_op))
+                    {
+                        if (temp_idx - 1 < 0)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                            return;
+                        }
+                        temp_buffer[temp_idx--] = lparen_id;
+                        temp_buffer[temp_idx--] = parent_op;
+                    }
+                    else
+                    {
+                        if (temp_idx < 0)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                            return;
+                        }
+                        temp_buffer[temp_idx--] = lparen_id;
+                    }
+                    stack_ptr--;
                 }
-
-                stack_starts[stack_ptr] = workspace_ptr;
-                stack_lens[stack_ptr] = 3 + op_len; // FIX
-                workspace[workspace_ptr++] = token_id;
-
-                workspace[workspace_ptr++] = lparen_id;
-                for (int k = 0; k < op_len; ++k)
-                    workspace[workspace_ptr++] = workspace[op_start + k];
-                workspace[workspace_ptr++] = rparen_id;
-            }
-            else
-            { // Postfix style: (operand)^2
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
-                {
-                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                    break;
+                else
+                { // Binary Parent
+                    if (parent_state == AWAITING_RIGHT_CHILD)
+                    {
+                        if (temp_idx < 0)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                            return;
+                        }
+                        temp_buffer[temp_idx--] = parent_op;
+                        state_stack[stack_ptr - 1] = AWAITING_LEFT_CHILD;
+                        child_is_done = false;
+                    }
+                    else
+                    { // AWAITING_LEFT_CHILD
+                        if (temp_idx < 0)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                            return;
+                        }
+                        temp_buffer[temp_idx--] = lparen_id;
+                        stack_ptr--;
+                    }
                 }
-                stack_starts[stack_ptr] = workspace_ptr;
-                stack_lens[stack_ptr] = 3 + op_len;
-                workspace[workspace_ptr++] = lparen_id;
-                for (int k = 0; k < op_len; ++k)
-                    workspace[workspace_ptr++] = workspace[op_start + k];
-                workspace[workspace_ptr++] = rparen_id;
-                workspace[workspace_ptr++] = token_id;
             }
-            stack_ptr++;
         }
-        else if (arity == 2)
-        { // Binary operator
-            if (stack_ptr < 2)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
-                break;
-            }
-            stack_ptr--;
-            int32_t op2_start = stack_starts[stack_ptr];
-            int32_t op2_len = stack_lens[stack_ptr];
-            stack_ptr--;
-            int32_t op1_start = stack_starts[stack_ptr];
-            int32_t op1_len = stack_lens[stack_ptr];
-
-            if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH * 2)
+        else
+        { // Operator
+            if (stack_ptr >= HARD_MAX_LENGTH)
             {
                 errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                break;
+                return;
             }
-            stack_starts[stack_ptr] = workspace_ptr;
-            stack_lens[stack_ptr] = 3 + op1_len + op2_len;
-            workspace[workspace_ptr++] = lparen_id;
-            for (int k = 0; k < op1_len; ++k)
-                workspace[workspace_ptr++] = workspace[op1_start + k];
-            workspace[workspace_ptr++] = token_id;
-            for (int k = 0; k < op2_len; ++k)
-                workspace[workspace_ptr++] = workspace[op2_start + k];
-            workspace[workspace_ptr++] = rparen_id;
+            op_stack[stack_ptr] = token;
+            state_stack[stack_ptr] = AWAITING_RIGHT_CHILD;
+
+            if (arity == 1 && !is_functional_style(token))
+            {
+                if (temp_idx < 0)
+                {
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                    return;
+                }
+                temp_buffer[temp_idx--] = token;
+            }
+            if (temp_idx < 0)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                return;
+            }
+            temp_buffer[temp_idx--] = rparen_id;
             stack_ptr++;
         }
     }
 
-    if (errors_acc[b] == 0)
+    if (stack_ptr > 0)
     {
-        if (stack_ptr != 1)
+        if (get_arity(op_stack[stack_ptr - 1]) == 1)
         {
-            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
         }
         else
         {
-            int32_t final_len = stack_lens[0];
-            if (final_len > M_infix)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
-            }
-            else
-            {
-                int32_t final_start = stack_starts[0];
-                for (int k = 0; k < final_len; ++k)
-                {
-                    infix_acc[b][k] = workspace[final_start + k];
-                }
-            }
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
+        }
+    }
+
+    if (errors_acc[b] != 0)
+        return;
+
+    // --- Final Copy to Output ---
+    int32_t final_len = (HARD_MAX_LENGTH * 3 - 1) - temp_idx;
+    int32_t temp_start_idx = temp_idx + 1;
+
+    if (final_len > M_infix)
+    {
+        errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+    }
+    else
+    {
+        for (int k = 0; k < final_len; ++k)
+        {
+            infix_acc[b][k] = temp_buffer[temp_start_idx + k];
+        }
+        for (int k = final_len; k < M_infix; ++k)
+        {
+            infix_acc[b][k] = NO_OP;
         }
     }
 }
 
+// TODO: why does cpu error not raise error?
 void postfix_to_infix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
     torch::PackedTensorAccessor32<int64_t, 2> infix_acc,
@@ -1059,140 +1177,169 @@ __global__ void prefix_to_infix_kernel(
 
     errors_acc[b] = 0;
 
-    // Per-thread workspace for building sub-expressions
-    int64_t workspace[HARD_MAX_LENGTH * 2];
-    int32_t workspace_ptr = 0;
-
-    // Stack holds pointers (start_idx, len) into the workspace
-    int32_t stack_starts[HARD_MAX_LENGTH * 2];
-    int32_t stack_lens[HARD_MAX_LENGTH * 2];
-    int32_t stack_ptr = 0;
-
-    // Find the actual length of the expression to avoid processing padding
-    int32_t len = 0;
-    while (len < M_prefix && prefix_acc[b][len] != NO_OP)
+    int32_t expression_len = 0;
+    int32_t balance_check = 0;
+    int32_t roots = 0;
+    bool ended = false;
+    for (int32_t i = 0; i < M_prefix; ++i)
     {
-        len++;
-    }
-
-    // Iterate from RIGHT to LEFT for prefix notation
-    for (int j = len - 1; j >= 0; --j)
-    {
-        int64_t token_id = prefix_acc[b][j];
-
-        int arity = get_arity(token_id);
-
-        if (arity == 0)
-        { // Operand
-            if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                break;
-            }
-            stack_starts[stack_ptr] = workspace_ptr;
-            stack_lens[stack_ptr] = 1;
-            workspace[workspace_ptr++] = token_id;
-            stack_ptr++;
-        }
-        else if (arity == 1)
-        { // Unary operator
-            if (stack_ptr < 1)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
-                break;
-            }
-            stack_ptr--;
-            int32_t op_start = stack_starts[stack_ptr];
-            int32_t op_len = stack_lens[stack_ptr];
-
-            // Functional style: op(operand)
-            if (is_functional_style(token_id))
-            {
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
-                {
-                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                    break;
-                }
-                stack_starts[stack_ptr] = workspace_ptr;
-                stack_lens[stack_ptr] = 3 + op_len;
-                workspace[workspace_ptr++] = token_id;
-                workspace[workspace_ptr++] = lparen_id;
-                for (int k = 0; k < op_len; ++k)
-                    workspace[workspace_ptr++] = workspace[op_start + k];
-                workspace[workspace_ptr++] = rparen_id;
-            }
-            else
-            { // Postfix style: (operand)^2
-                if (workspace_ptr + 3 + op_len > HARD_MAX_LENGTH * 2)
-                {
-                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                    break;
-                }
-                stack_starts[stack_ptr] = workspace_ptr;
-                stack_lens[stack_ptr] = 3 + op_len;
-                workspace[workspace_ptr++] = lparen_id;
-                for (int k = 0; k < op_len; ++k)
-                    workspace[workspace_ptr++] = workspace[op_start + k];
-                workspace[workspace_ptr++] = rparen_id;
-                workspace[workspace_ptr++] = token_id;
-            }
-            stack_ptr++;
-        }
-        else if (arity == 2)
-        { // Binary operator
-            if (stack_ptr < 2)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
-                break;
-            }
-            // Note the order of popping for prefix is reversed from postfix
-            stack_ptr--;
-            int32_t op1_start = stack_starts[stack_ptr];
-            int32_t op1_len = stack_lens[stack_ptr];
-            stack_ptr--;
-            int32_t op2_start = stack_starts[stack_ptr];
-            int32_t op2_len = stack_lens[stack_ptr];
-
-            if (workspace_ptr + 3 + op1_len + op2_len > HARD_MAX_LENGTH * 2)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                break;
-            }
-            stack_starts[stack_ptr] = workspace_ptr;
-            stack_lens[stack_ptr] = 3 + op1_len + op2_len;
-            workspace[workspace_ptr++] = lparen_id;
-            for (int k = 0; k < op1_len; ++k)
-                workspace[workspace_ptr++] = workspace[op1_start + k];
-            workspace[workspace_ptr++] = token_id;
-            for (int k = 0; k < op2_len; ++k)
-                workspace[workspace_ptr++] = workspace[op2_start + k];
-            workspace[workspace_ptr++] = rparen_id;
-            stack_ptr++;
-        }
-    }
-
-    if (errors_acc[b] == 0)
-    {
-        if (stack_ptr != 1)
+        if (prefix_acc[b][i] == NO_OP)
         {
-            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
+            ended = true;
         }
         else
         {
-            int32_t final_len = stack_lens[0];
-            if (final_len > M_infix)
+            if (ended)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNEXPECTED_TOKEN); // Unexpected token after end
+                return;
+            }
+            expression_len++;
+            balance_check += get_arity(prefix_acc[b][i]) - 1;
+            if (balance_check == -1)
+            {
+                roots++;
+            }
+        }
+    }
+
+    if (expression_len == 0)
+    {
+        for (int k = 0; k < M_infix; ++k)
+        {
+            infix_acc[b][k] = NO_OP;
+        }
+        return;
+    }
+    if (roots > 1)
+    {
+        errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MULTIPLE_ROOTS); // More than one root in the expression
+        return;
+    }
+
+    constexpr int32_t AWAITING_LEFT_CHILD = 0;
+    constexpr int32_t AWAITING_RIGHT_CHILD = 1;
+
+    int32_t op_stack[HARD_MAX_LENGTH];
+    int32_t state_stack[HARD_MAX_LENGTH];
+    int32_t stack_ptr = 0;
+
+    int32_t prefix_idx = 0;
+    int32_t infix_idx = 0;
+
+    while (prefix_idx < expression_len)
+    {
+        int64_t token = prefix_acc[b][prefix_idx++];
+        int arity = get_arity(token);
+
+        if (arity == 0)
+        { // Operand
+            if (infix_idx >= M_infix)
             {
                 errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+                return;
             }
-            else
+            infix_acc[b][infix_idx++] = token;
+
+            bool child_is_done = true;
+            while (child_is_done && stack_ptr > 0)
             {
-                int32_t final_start = stack_starts[0];
-                for (int k = 0; k < final_len; ++k)
-                {
-                    infix_acc[b][k] = workspace[final_start + k];
+                int32_t parent_op = op_stack[stack_ptr - 1];
+                int32_t parent_state = state_stack[stack_ptr - 1];
+
+                if (get_arity(parent_op) == 1)
+                { // Unary Parent
+                    if (infix_idx >= M_infix)
+                    {
+                        errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+                        return;
+                    }
+                    infix_acc[b][infix_idx++] = rparen_id;
+                    if (!is_functional_style(parent_op))
+                    {
+                        if (infix_idx >= M_infix)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+                            return;
+                        }
+                        infix_acc[b][infix_idx++] = parent_op;
+                    }
+                    stack_ptr--;
+                }
+                else
+                { // Binary Parent
+                    if (parent_state == AWAITING_LEFT_CHILD)
+                    {
+                        if (infix_idx >= M_infix)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+                            return;
+                        }
+                        infix_acc[b][infix_idx++] = parent_op;
+                        state_stack[stack_ptr - 1] = AWAITING_RIGHT_CHILD;
+                        child_is_done = false;
+                    }
+                    else
+                    { // AWAITING_RIGHT_CHILD
+                        if (infix_idx >= M_infix)
+                        {
+                            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+                            return;
+                        }
+                        infix_acc[b][infix_idx++] = rparen_id;
+                        stack_ptr--;
+                    }
                 }
             }
         }
+        else
+        { // Operator
+            if (stack_ptr >= HARD_MAX_LENGTH)
+            {
+                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                return;
+            }
+            op_stack[stack_ptr] = token;
+            state_stack[stack_ptr] = AWAITING_LEFT_CHILD;
+
+            if (arity == 1 && is_functional_style(token))
+            {
+                if (infix_idx + 2 > M_infix)
+                {
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+                    return;
+                }
+                infix_acc[b][infix_idx++] = token;
+                infix_acc[b][infix_idx++] = lparen_id;
+            }
+            else
+            {
+                if (infix_idx + 1 > M_infix)
+                {
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_INFIX_TOO_LONG);
+                    return;
+                }
+                infix_acc[b][infix_idx++] = lparen_id;
+            }
+            stack_ptr++;
+        }
+    }
+
+    if (errors_acc[b] == 0 && stack_ptr != 0)
+    {
+        if (get_arity(op_stack[stack_ptr - 1]) == 1)
+        {
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
+        }
+        else
+        {
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
+        }
+    }
+
+    for (int k = infix_idx; k < M_infix; ++k)
+    {
+        infix_acc[b][k] = NO_OP;
     }
 }
 
@@ -1209,149 +1356,154 @@ void prefix_to_infix_cuda_impl(
         prefix_acc, infix_acc, errors_acc, lparen_id, rparen_id, B, M_prefix, M_infix);
 }
 
-__global__ void prefix_to_postfix_kernel(
+__global__ void prefix_to_postfix_parent_kernel(
     const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
     torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> parents_acc,
     torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
-    int64_t B, int64_t M_prefix, int64_t M_postfix)
+    int64_t B, int64_t M)
 {
-    int b = blockIdx.x * blockDim.x + threadIdx.x;
+    int32_t b = blockIdx.x * blockDim.x + threadIdx.x;
     if (b >= B)
         return;
 
     errors_acc[b] = 0;
 
-    // Per-thread workspace for building sub-expressions
-    int64_t workspace[HARD_MAX_LENGTH * 2];
-    int32_t workspace_ptr = 0;
-
-    // Stack holds pointers (start_idx, len) into the workspace
-    int32_t stack_starts[HARD_MAX_LENGTH * 2];
-    int32_t stack_lens[HARD_MAX_LENGTH * 2];
-    int32_t stack_ptr = 0;
-
-    // Find the actual length of the expression to avoid processing padding
-    int32_t len = 0;
-    while (len < M_prefix && prefix_acc[b][len] != NO_OP)
+    int32_t expression_len = 0;
+    while (expression_len < M && prefix_acc[b][expression_len] != NO_OP)
     {
-        len++;
+        expression_len++;
+    }
+    if (expression_len == 0)
+        return;
+
+    // --- Pass 1: Build parent pointers for the prefix tree ---
+    int32_t prefix_parents[HARD_MAX_LENGTH];
+    int32_t child_stack[HARD_MAX_LENGTH];
+    int32_t child_stack_ptr = 0;
+
+    for (int32_t i = 0; i < expression_len; ++i)
+    {
+        prefix_parents[i] = NULL_PARENT;
     }
 
-    // Iterate from RIGHT to LEFT for prefix notation
-    for (int j = len - 1; j >= 0; --j)
+    for (int32_t i = expression_len - 1; i >= 0; i--)
     {
-        int64_t token_id = prefix_acc[b][j];
-
-        int arity = get_arity(token_id);
-
-        if (arity == 0)
-        { // Operand (variable or constant)
-            if (stack_ptr >= HARD_MAX_LENGTH * 2 || workspace_ptr >= HARD_MAX_LENGTH * 2)
+        int64_t token = prefix_acc[b][i];
+        int arity = get_arity(token);
+        if (arity > 0)
+        {
+            if (child_stack_ptr < arity)
             {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                break;
+                errors_acc[b] = (arity == 1) ? static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND)
+                                             : static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
+                return;
             }
-            stack_starts[stack_ptr] = workspace_ptr;
-            stack_lens[stack_ptr] = 1;
-            workspace[workspace_ptr++] = token_id;
-            stack_ptr++;
+            for (int j = 0; j < arity; ++j)
+            {
+                int32_t child_idx = child_stack[--child_stack_ptr];
+                prefix_parents[child_idx] = i;
+            }
         }
-        else if (arity == 1)
-        { // Unary operator
-            if (stack_ptr < 1)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND);
-                break;
-            }
-            stack_ptr--;
-            int32_t operand_start = stack_starts[stack_ptr];
-            int32_t operand_len = stack_lens[stack_ptr];
-
-            if (workspace_ptr + operand_len + 1 > HARD_MAX_LENGTH * 2)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                break;
-            }
-            stack_starts[stack_ptr] = workspace_ptr;
-            stack_lens[stack_ptr] = operand_len + 1;
-            // Copy operand first, then operator (postfix order)
-            for (int k = 0; k < operand_len; ++k)
-                workspace[workspace_ptr++] = workspace[operand_start + k];
-            workspace[workspace_ptr++] = token_id;
-            stack_ptr++;
+        if (child_stack_ptr >= HARD_MAX_LENGTH)
+        {
+            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+            return;
         }
-        else if (arity == 2)
-        { // Binary operator
-            if (stack_ptr < 2)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_BINARY_OP_MISSING_OPERANDS);
-                break;
-            }
-            // For prefix to postfix, the first operand popped is the left operand
-            stack_ptr--;
-            int32_t left_start = stack_starts[stack_ptr];
-            int32_t left_len = stack_lens[stack_ptr];
-            stack_ptr--;
-            int32_t right_start = stack_starts[stack_ptr];
-            int32_t right_len = stack_lens[stack_ptr];
-
-            if (workspace_ptr + left_len + right_len + 1 > HARD_MAX_LENGTH * 2)
-            {
-                errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
-                break;
-            }
-            stack_starts[stack_ptr] = workspace_ptr;
-            stack_lens[stack_ptr] = left_len + right_len + 1;
-            // Copy left operand, then right operand, then operator (postfix order)
-            for (int k = 0; k < left_len; ++k)
-                workspace[workspace_ptr++] = workspace[left_start + k];
-            for (int k = 0; k < right_len; ++k)
-                workspace[workspace_ptr++] = workspace[right_start + k];
-            workspace[workspace_ptr++] = token_id;
-            stack_ptr++;
-        }
+        child_stack[child_stack_ptr++] = i;
     }
 
-    if (errors_acc[b] == 0)
+    if (child_stack_ptr != 1)
     {
-        if (stack_ptr != 1)
+        errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
+        return;
+    }
+
+    // --- Pass 2: Perform iterative post-order traversal to build postfix and parent arrays ---
+    int32_t traversal_stack[HARD_MAX_LENGTH];
+    int32_t traversal_stack_ptr = 0;
+
+    int32_t prefix_to_postfix_map[HARD_MAX_LENGTH]; // Map prefix index to its new postfix index
+    int32_t postfix_idx = 0;
+
+    traversal_stack[traversal_stack_ptr++] = 0; // Start traversal at the root (index 0)
+    int32_t last_node_visited = -1;
+
+    while (traversal_stack_ptr > 0)
+    {
+        int32_t current_prefix_idx = traversal_stack[traversal_stack_ptr - 1];
+        int64_t current_token = prefix_acc[b][current_prefix_idx];
+        int arity = get_arity(current_token);
+
+        // Find children of the current node
+        int32_t children_indices[MAX_ARITY];
+        int32_t child_count = 0;
+        if (arity > 0)
         {
-            errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
+            for (int32_t i = current_prefix_idx + 1; i < expression_len && child_count < arity; ++i)
+            {
+                if (prefix_parents[i] == current_prefix_idx)
+                {
+                    children_indices[child_count++] = i;
+                }
+            }
         }
-        else
+
+        // If we are coming down the tree and there are unvisited children
+        if (child_count > 0 && last_node_visited != children_indices[child_count - 1] && (child_count == 1 || last_node_visited != children_indices[0]))
         {
-            int32_t final_len = stack_lens[0];
-            if (final_len > M_postfix)
+            for (int i = child_count - 1; i >= 0; --i)
+            {
+                if (traversal_stack_ptr >= HARD_MAX_LENGTH)
+                {
+                    errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW);
+                    return;
+                }
+                traversal_stack[traversal_stack_ptr++] = children_indices[i];
+            }
+        }
+        else // We are coming up the tree (children are visited) or it's a leaf
+        {
+            if (postfix_idx >= M)
             {
                 errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_RESULTING_POSTFIX_TOO_LONG);
+                return;
+            }
+
+            // Write to postfix array
+            postfix_acc[b][postfix_idx] = current_token;
+
+            // Map prefix index to its new postfix index
+            prefix_to_postfix_map[current_prefix_idx] = postfix_idx;
+
+            // Set the parent pointer in the final parents_acc array
+            int32_t parent_prefix_idx = prefix_parents[current_prefix_idx];
+            if (parent_prefix_idx != NULL_PARENT)
+            {
+                parents_acc[b][postfix_idx] = prefix_to_postfix_map[parent_prefix_idx];
             }
             else
             {
-                int32_t final_start = stack_starts[0];
-                for (int k = 0; k < final_len; ++k)
-                {
-                    postfix_acc[b][k] = workspace[final_start + k];
-                }
-                // Add padding
-                for (int k = final_len; k < M_postfix; ++k)
-                {
-                    postfix_acc[b][k] = NO_OP;
-                }
+                parents_acc[b][postfix_idx] = NULL_PARENT;
             }
+
+            postfix_idx++;
+            last_node_visited = traversal_stack[--traversal_stack_ptr];
         }
     }
-}
 
-void prefix_to_postfix_cuda_impl(
-    const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
-    torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
-    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
-    int64_t B, int64_t M_prefix, int64_t M_postfix)
-{
-    const int threads = THREAD_COUNT;
-    const int blocks = (B + threads - 1) / threads;
-    prefix_to_postfix_kernel<<<blocks, threads>>>(
-        prefix_acc, postfix_acc, errors_acc, B, M_prefix, M_postfix);
+    if (postfix_idx != expression_len)
+    {
+        errors_acc[b] = static_cast<int64_t>(ErrorCode::CONVERSION_MALFORMED_EXPRESSION);
+        return;
+    }
+
+    // Add padding to the end of the output arrays
+    for (int32_t i = postfix_idx; i < M; ++i)
+    {
+        postfix_acc[b][i] = NO_OP;
+        parents_acc[b][i] = NULL_CHILD; // Use NULL_CHILD for padding in parent array for consistency
+    }
 }
 
 void prefix_to_postfix_parent_cuda_impl(
@@ -1361,27 +1513,15 @@ void prefix_to_postfix_parent_cuda_impl(
     torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
     int64_t B, int64_t M_prefix, int64_t M_postfix)
 {
-    // For now, fall back to CPU implementation
-    // Convert packed accessors to regular accessors by moving to CPU
-    auto prefix_cpu = torch::empty({B, M_prefix}, torch::kInt64).cpu();
-    auto postfix_cpu = torch::empty({B, M_postfix}, torch::kInt64).cpu();
-    auto parents_cpu = torch::empty({B, M_postfix}, torch::kInt64).cpu();
-    auto errors_cpu = torch::empty({B}, torch::kInt64).cpu();
+    // The maximum length of the output is the same as the input.
+    TORCH_CHECK(M_prefix == M_postfix, "prefix_to_postfix_parent expects input and output to have the same max length.");
 
-    // Copy data from GPU to CPU
-    cudaMemcpy(prefix_cpu.data_ptr(), prefix_acc.data(), B * M_prefix * sizeof(int64_t), cudaMemcpyDeviceToHost);
-    cudaMemcpy(errors_cpu.data_ptr(), errors_acc.data(), B * sizeof(int64_t), cudaMemcpyDeviceToHost);
-
-    // Call CPU implementation
-    prefix_to_postfix_parent_cpu_impl(
-        prefix_cpu.accessor<int64_t, 2>(),
-        postfix_cpu.accessor<int64_t, 2>(),
-        parents_cpu.accessor<int64_t, 2>(),
-        errors_cpu.accessor<int64_t, 1>(),
-        B, M_prefix, M_postfix);
-
-    // Copy results back to GPU
-    cudaMemcpy(postfix_acc.data(), postfix_cpu.data_ptr(), B * M_postfix * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(parents_acc.data(), parents_cpu.data_ptr(), B * M_postfix * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(errors_acc.data(), errors_cpu.data_ptr(), B * sizeof(int64_t), cudaMemcpyHostToDevice);
+    const int threads = THREAD_COUNT;
+    const int blocks = (B + threads - 1) / threads;
+    prefix_to_postfix_parent_kernel<<<blocks, threads>>>(
+        prefix_acc,
+        postfix_acc,
+        parents_acc,
+        errors_acc,
+        B, M_prefix);
 }

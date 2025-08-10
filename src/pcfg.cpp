@@ -906,6 +906,13 @@ torch::Tensor ProbabilisticContextFreeGrammar::postfix_to_infix(torch::Tensor ex
     int64_t lparen_id = get_symbol_id("(");
     int64_t rparen_id = get_symbol_id(")");
 
+    TORCH_CHECK(expressions.device() == device,
+                "Input tensor must be on the same device as the PCFG, but got input on " + expressions.device().str() + " and PCFG on " + device.str() + ".");
+    TORCH_CHECK((0 <= expressions).all().item<bool>(),
+                "All symbols in the expressions must be non-negative integers.");
+    TORCH_CHECK((expressions < this->n_operators).all().item<bool>(),
+                "All symbols in the expressions must be valid operator IDs.");
+
     if (device.is_cuda())
     {
         postfix_to_infix_cuda_impl(
@@ -921,7 +928,6 @@ torch::Tensor ProbabilisticContextFreeGrammar::postfix_to_infix(torch::Tensor ex
             expressions.accessor<int64_t, 2>(),
             infix_out.accessor<int64_t, 2>(),
             errors.accessor<int64_t, 1>(),
-            this->id_to_symbol, // Not needed for tensor conversion
             lparen_id, rparen_id,
             B, M_postfix, max_infix_len);
     }
