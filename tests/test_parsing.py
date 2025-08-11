@@ -43,28 +43,21 @@ def pcfg(request: pytest.FixtureRequest):
     return ProbabilisticContextFreeGrammar(test_grammar, "E", 20, 1, torch.device(device))
 
 
-def test_parse_to_postfix_constant(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_constant(pcfg: ProbabilisticContextFreeGrammar):
     expression = torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     assert torch.equal(ops[:, :1], expression)
-    assert torch.equal(children[:, 0], torch.tensor([[NULL_CHILD, NULL_CHILD]], dtype=torch.int64, device=pcfg.device))
-
-
-def test_parse_to_prefix_constant(pcfg: ProbabilisticContextFreeGrammar):
-    expression = torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
-
-    assert torch.equal(ops[:, :1], expression)
-    assert torch.equal(children[:, 0], torch.tensor([[NULL_CHILD, NULL_CHILD]], dtype=torch.int64, device=pcfg.device))
-
+    assert torch.equal(children[:, 0], torch.tensor([[NULL_CHILD, NULL_CHILD]], dtype=torch.int64, device=pcfg.device))  
 
 @pytest.mark.parametrize("op_id", [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQRT), int(Operator.SQUARE), int(Operator.TAN), int(Operator.ARCSIN), int(Operator.ARCCOS), int(Operator.ARCTAN), int(Operator.SINH), int(Operator.COSH), int(Operator.TANH), int(Operator.FLOOR), int(Operator.CEIL), int(Operator.LN), int(Operator.LOG10), int(Operator.NEG), int(Operator.INV), int(Operator.CUBE), int(Operator.FOURTH), int(Operator.FIFTH)])
-def test_parse_to_postfix_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
     expression = torch.tensor([[op_id, LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     expected_ops = torch.tensor([[int(Operator.CONST_1), op_id]], dtype=torch.int64, device=pcfg.device)
     expected_children = torch.tensor([[[NULL_CHILD, NULL_CHILD], [0, NULL_CHILD]]], dtype=torch.int64, device=pcfg.device)
@@ -73,24 +66,11 @@ def test_parse_to_postfix_unary(op_id: int, pcfg: ProbabilisticContextFreeGramma
     assert torch.equal(children[:, :2], expected_children)
 
 
-@pytest.mark.parametrize("op_id", [Operator.SIN, Operator.COS, Operator.EXP, Operator.LOG, Operator.SQRT, Operator.SQUARE, Operator.TAN, Operator.ARCSIN, Operator.ARCCOS, Operator.ARCTAN, Operator.SINH, Operator.COSH, Operator.TANH, Operator.FLOOR, Operator.CEIL, Operator.LN, Operator.LOG10, Operator.NEG, Operator.INV, Operator.CUBE, Operator.FOURTH, Operator.FIFTH])
-def test_parse_to_prefix_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
-    LPAREN = pcfg.get_symbol_id('(')
-    RPAREN = pcfg.get_symbol_id(')')
-    expression = torch.tensor([[op_id, LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
-
-    expected_ops = torch.tensor([[op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children = torch.tensor([[[1, NULL_CHILD], [NULL_CHILD, NULL_CHILD]]], dtype=torch.int64, device=pcfg.device)
-
-    assert torch.equal(ops[:, :2], expected_ops)
-    assert torch.equal(children[:, :2], expected_children)
-
-
 @pytest.mark.parametrize("op_id", [Operator.ADD, Operator.SUB, Operator.MUL, Operator.DIV, Operator.POW])
-def test_parse_to_postfix_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     expression = torch.tensor([[int(Operator.CONST_1), op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     expected_ops = torch.tensor([[int(Operator.CONST_1), int(Operator.CONST_1), op_id]], dtype=torch.int64, device=pcfg.device)
     expected_children = torch.tensor([[[NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD], [0, 1]]], dtype=torch.int64, device=pcfg.device)
@@ -98,25 +78,13 @@ def test_parse_to_postfix_binary(op_id: int, pcfg: ProbabilisticContextFreeGramm
     assert torch.equal(ops[:, :3], expected_ops)
     assert torch.equal(children[:, :3], expected_children)
 
-
-@pytest.mark.parametrize("op_id", [Operator.ADD, Operator.SUB, Operator.MUL, Operator.DIV, Operator.POW])
-def test_parse_to_prefix_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
-    expression = torch.tensor([[int(Operator.CONST_1), op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
-
-    expected_ops = torch.tensor([[op_id, int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children = torch.tensor([[[1, 2], [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD]]], dtype=torch.int64, device=pcfg.device)
-
-    assert torch.equal(ops[:, :3], expected_ops)
-    assert torch.equal(children[:, :3], expected_children)
-
-
-def test_parse_to_postfix_parenthesis(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfixhesis(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
     # (1 + 1) * 1
     expression = torch.tensor([[LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     expected_ops = torch.tensor([[int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.MUL)]], dtype=torch.int64, device=pcfg.device)
     expected_children = torch.tensor([[[NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD], [0, 1], [NULL_CHILD, NULL_CHILD], [2, 3]]], dtype=torch.int64, device=pcfg.device)
@@ -124,20 +92,21 @@ def test_parse_to_postfix_parenthesis(pcfg: ProbabilisticContextFreeGrammar):
     assert torch.equal(ops[:, :5], expected_ops)
     assert torch.equal(children[:, :5], expected_children)
 
-def test_parse_to_prefix_parenthesis(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefixhesis(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
     # (1 + 1) * 1
     expression = torch.tensor([[LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     expected_ops = torch.tensor([[int(Operator.MUL), int(Operator.ADD), int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children = torch.tensor([[[1, 4], [2, 3], [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD]]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[NULL_PARENT, 0, 1, 1, 0]], dtype=torch.int64, device=pcfg.device)
 
     assert torch.equal(ops[:, :5], expected_ops)
-    assert torch.equal(children[:, :5], expected_children)
+    assert torch.equal(parents[:, :5], expected_parents)
 
-def test_parse_to_postfix_all_operators(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_all_operators(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
     # (sin(X_0) + 1) * (log(X_0) - 1)
@@ -147,7 +116,8 @@ def test_parse_to_postfix_all_operators(pcfg: ProbabilisticContextFreeGrammar):
         int(Operator.MUL),
         LPAREN, int(Operator.LOG), LPAREN, X_0, RPAREN, int(Operator.SUB), int(Operator.CONST_1), RPAREN
     ]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     expected_ops = torch.tensor([[X_0, int(Operator.SIN), int(Operator.CONST_1), int(Operator.ADD), X_0, int(Operator.LOG), int(Operator.CONST_1), int(Operator.SUB), int(Operator.MUL)]], dtype=torch.int64, device=pcfg.device)
     expected_children = torch.tensor([[
@@ -159,39 +129,11 @@ def test_parse_to_postfix_all_operators(pcfg: ProbabilisticContextFreeGrammar):
     assert torch.equal(ops[:, :9], expected_ops)
     assert torch.equal(children[:, :9], expected_children)
 
-
-def test_parse_to_prefix_all_operators(pcfg: ProbabilisticContextFreeGrammar):
-    LPAREN = pcfg.get_symbol_id('(')
-    RPAREN = pcfg.get_symbol_id(')')
-    # (sin(X_0) + 1) * (log(X_0) - 1)
-    X_0 = int(Operator.VAR_START_ID)
-    expression = torch.tensor([[LPAREN, int(Operator.SIN), LPAREN, X_0, RPAREN, int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), LPAREN, int(Operator.LOG), LPAREN, X_0, RPAREN, int(Operator.SUB), int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
-
-    # Prefix: * + sin X_0 1 - log X_0 1
-    expected_ops = torch.tensor([[int(Operator.MUL), int(Operator.ADD), int(Operator.SIN), X_0, int(Operator.CONST_1), int(Operator.SUB), int(Operator.LOG), X_0, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children = torch.tensor([
-        [
-            [1, 5],  # *
-            [2, 4],  # +
-            [3, NULL_CHILD],  # sin
-            [NULL_CHILD, NULL_CHILD],  # X_0
-            [NULL_CHILD, NULL_CHILD],  # 1
-            [6, 8],  # -
-            [7, NULL_CHILD],  # log
-            [NULL_CHILD, NULL_CHILD],  # X_0
-            [NULL_CHILD, NULL_CHILD]   # 1
-        ]
-    ], dtype=torch.int64, device=pcfg.device)
-
-    assert torch.equal(ops[:, :9], expected_ops)
-    assert torch.equal(children[:, :9], expected_children)
-
-
-def test_parse_to_postfix_precedence(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_precedence(pcfg: ProbabilisticContextFreeGrammar):
     # 1 + 1 * 1
     expression = torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     # Postfix: 1, 1, 1, *, +
     expected_ops = torch.tensor([[int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.MUL), int(Operator.ADD)]], dtype=torch.int64, device=pcfg.device)
@@ -207,32 +149,29 @@ def test_parse_to_postfix_precedence(pcfg: ProbabilisticContextFreeGrammar):
     assert torch.equal(children[:, :5], expected_children)
 
 
-def test_parse_to_prefix_precedence(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_precedence(pcfg: ProbabilisticContextFreeGrammar):
     # 1 + 1 * 1
     expression = torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     # Prefix: + 1 * 1 1
     expected_ops = torch.tensor([[int(Operator.ADD), int(Operator.CONST_1), int(Operator.MUL), int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children = torch.tensor([[
-        [1, 2],                   # +
-        [NULL_CHILD, NULL_CHILD], # 1
-        [3, 4],                   # *
-        [NULL_CHILD, NULL_CHILD], # 1
-        [NULL_CHILD, NULL_CHILD]  # 1
-    ]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[NULL_PARENT, 0, 0, 2, 2]], dtype=torch.int64, device=pcfg.device)
 
     assert torch.equal(ops[:, :5], expected_ops)
-    assert torch.equal(children[:, :5], expected_children)
+    assert torch.equal(parents[:, :5], expected_parents)
 
 
-def test_parse_to_postfix_associativity(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_associativity(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
 
     # Left associativity: 1 + 1 + 1 + 1 -> ((1+1)+1)+1
     expression_add = torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops_add, children_add = pcfg.parse_to_postfix(expression_add)
+    ops_add = pcfg.infix_to_postfix(expression_add)
+    children_add = pcfg.get_postfix_children(ops_add)
+
     expected_ops_add = torch.tensor([[int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.ADD)]], dtype=torch.int64, device=pcfg.device)
     expected_children_add = torch.tensor([[
         [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD], [0, 1],
@@ -244,7 +183,8 @@ def test_parse_to_postfix_associativity(pcfg: ProbabilisticContextFreeGrammar):
 
     # Right associativity: sin(sin(sin(sin(1))))
     expression_sin = torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.SIN), LPAREN, int(Operator.SIN), LPAREN, int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN, RPAREN, RPAREN, RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops_sin, children_sin = pcfg.parse_to_postfix(expression_sin)
+    ops_sin = pcfg.infix_to_postfix(expression_sin)
+    children_sin = pcfg.get_postfix_children(ops_sin)
     expected_ops_sin = torch.tensor([[int(Operator.CONST_1), int(Operator.SIN), int(Operator.SIN), int(Operator.SIN), int(Operator.SIN)]], dtype=torch.int64, device=pcfg.device)
     expected_children_sin = torch.tensor([[
         [NULL_CHILD, NULL_CHILD], [0, NULL_CHILD], [1, NULL_CHILD], [2, NULL_CHILD], [3, NULL_CHILD]
@@ -253,42 +193,39 @@ def test_parse_to_postfix_associativity(pcfg: ProbabilisticContextFreeGrammar):
     assert torch.equal(children_sin[:, :5], expected_children_sin)
 
 
-def test_parse_to_prefix_associativity(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_associativity(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
 
     # Left associativity: 1 + 1 + 1 + 1 -> ((1+1)+1)+1
     expression_add = torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops_add, children_add = pcfg.parse_to_prefix(expression_add)
+    ops_add = pcfg.infix_to_prefix(expression_add)
+    parents_add = pcfg.get_prefix_parent(ops_add)
     # Prefix: + + + 1 1 1 1
     expected_ops_add = torch.tensor([[int(Operator.ADD), int(Operator.ADD), int(Operator.ADD), int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children_add = torch.tensor([[
-        [1, 6], [2, 5], [3, 4],
-        [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD],
-        [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD]
-    ]], dtype=torch.int64, device=pcfg.device)
+    expected_parents_add = torch.tensor([[NULL_PARENT, 0, 1, 2, 2, 1, 0]], dtype=torch.int64, device=pcfg.device)
     assert torch.equal(ops_add[:, :7], expected_ops_add)
-    assert torch.equal(children_add[:, :7], expected_children_add)
+    assert torch.equal(parents_add[:, :7], expected_parents_add)
 
     # Right associativity: sin(sin(sin(sin(1))))
     expression_sin = torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.SIN), LPAREN, int(Operator.SIN), LPAREN, int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN, RPAREN, RPAREN, RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops_sin, children_sin = pcfg.parse_to_prefix(expression_sin)
+    ops_sin = pcfg.infix_to_prefix(expression_sin)
+    parents_sin = pcfg.get_prefix_parent(ops_sin)
     # Prefix: sin sin sin sin 1
     expected_ops_sin = torch.tensor([[int(Operator.SIN), int(Operator.SIN), int(Operator.SIN), int(Operator.SIN), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children_sin = torch.tensor([[
-        [1, NULL_CHILD], [2, NULL_CHILD], [3, NULL_CHILD], [4, NULL_CHILD], [NULL_CHILD, NULL_CHILD]
-    ]], dtype=torch.int64, device=pcfg.device)
+    expected_parents_sin = torch.tensor([[NULL_PARENT, 0, 1, 2, 3]], dtype=torch.int64, device=pcfg.device)
     assert torch.equal(ops_sin[:, :5], expected_ops_sin)
-    assert torch.equal(children_sin[:, :5], expected_children_sin)
+    assert torch.equal(parents_sin[:, :5], expected_parents_sin)
 
 
-def test_parse_to_postfix_mixed_operators(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_mixed_operators(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
 
     # sin(1) + 1
     expression = torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN, int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     # Postfix: 1, sin, 1, +
     expected_ops = torch.tensor([[int(Operator.CONST_1), int(Operator.SIN), int(Operator.CONST_1), int(Operator.ADD)]], dtype=torch.int64, device=pcfg.device)
@@ -303,28 +240,24 @@ def test_parse_to_postfix_mixed_operators(pcfg: ProbabilisticContextFreeGrammar)
     assert torch.equal(children[:, :4], expected_children)
 
 
-def test_parse_to_prefix_mixed_operators(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_mixed_operators(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
 
     # sin(1) + 1
     expression = torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN, int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     # Prefix: + sin 1 1
     expected_ops = torch.tensor([[int(Operator.ADD), int(Operator.SIN), int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children = torch.tensor([[
-        [1, 3],                   # +
-        [2, NULL_CHILD],          # sin
-        [NULL_CHILD, NULL_CHILD], # 1
-        [NULL_CHILD, NULL_CHILD]  # 1
-    ]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[NULL_PARENT, 0, 1, 0]], dtype=torch.int64, device=pcfg.device)
 
     assert torch.equal(ops[:, :4], expected_ops)
-    assert torch.equal(children[:, :4], expected_children)
+    assert torch.equal(parents[:, :4], expected_parents)
 
 
-def test_parse_to_postfix_complex_parenthesis(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_complex_parenthesis(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
 
@@ -334,7 +267,8 @@ def test_parse_to_postfix_complex_parenthesis(pcfg: ProbabilisticContextFreeGram
         int(Operator.ADD),
         LPAREN, int(Operator.CONST_1), int(Operator.ADD), LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, RPAREN
     ]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     # Postfix: 1 1 + 1 1 1 + + +
     expected_ops = torch.tensor([[int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.ADD), int(Operator.ADD), int(Operator.ADD)]], dtype=torch.int64, device=pcfg.device)
@@ -349,7 +283,7 @@ def test_parse_to_postfix_complex_parenthesis(pcfg: ProbabilisticContextFreeGram
     assert torch.equal(children[:, :9], expected_children)
 
 
-def test_parse_to_prefix_complex_parenthesis(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_complex_parenthesis(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
 
@@ -359,77 +293,18 @@ def test_parse_to_prefix_complex_parenthesis(pcfg: ProbabilisticContextFreeGramm
         int(Operator.ADD),
         LPAREN, int(Operator.CONST_1), int(Operator.ADD), LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, RPAREN
     ]], dtype=torch.int64, device=pcfg.device)
-    ops, children = pcfg.parse_to_prefix(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     # Prefix: + + 1 1 + 1 + 1 1
     expected_ops = torch.tensor([[int(Operator.ADD), int(Operator.ADD), int(Operator.CONST_1), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    expected_children = torch.tensor([[
-        [1, 4], [2, 3],
-        [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD],
-        [5, 6],
-        [NULL_CHILD, NULL_CHILD],
-        [7, 8],
-        [NULL_CHILD, NULL_CHILD], [NULL_CHILD, NULL_CHILD]
-    ]], dtype=torch.int64, device=pcfg.device)
+    expected_parents = torch.tensor([[NULL_PARENT, 0, 1, 1, 0, 4, 4, 6, 6]], dtype=torch.int64, device=pcfg.device)
 
     assert torch.equal(ops[:, :9], expected_ops)
-    assert torch.equal(children[:, :9], expected_children)
+    assert torch.equal(parents[:, :9], expected_parents), f"Expected parents: {expected_parents}, got: {parents}"
 
 
-def test_parse_to_postfix_batch(pcfg: ProbabilisticContextFreeGrammar):
-    LPAREN = pcfg.get_symbol_id('(')
-    RPAREN = pcfg.get_symbol_id(')')
-
-    expressions_list = [
-        torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64),
-        torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64),
-        torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64),
-        torch.tensor([[LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64),
-    ]
-    max_len = max(e.shape[1] for e in expressions_list)
-    expressions = torch.full((len(expressions_list), max_len), int(Operator.NO_OP), dtype=torch.int64, device=pcfg.device)
-    for i, e in enumerate(expressions_list):
-        expressions[i, :e.shape[1]] = e
-
-    batch_ops, batch_children = pcfg.parse_to_postfix(expressions)
-
-    for i, expr in enumerate(expressions_list):
-        single_ops, single_children = pcfg.parse_to_postfix(expr.to(pcfg.device))
-        len_single_ops = single_ops.shape[1]
-        # Check that the output is correct
-        assert torch.equal(batch_ops[i, :len_single_ops], single_ops[0])
-        assert torch.equal(batch_children[i, :len_single_ops], single_children[0])
-        # Check padding
-        assert torch.all(batch_ops[i, len_single_ops:] == int(Operator.NO_OP))
-
-
-def test_parse_to_prefix_batch(pcfg: ProbabilisticContextFreeGrammar):
-    LPAREN = pcfg.get_symbol_id('(')
-    RPAREN = pcfg.get_symbol_id(')')
-    expressions_list = [
-        torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64),
-        torch.tensor([[int(Operator.SIN), LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64),
-        torch.tensor([[int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1)]], dtype=torch.int64),
-        torch.tensor([[LPAREN, int(Operator.CONST_1), int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), int(Operator.CONST_1)]], dtype=torch.int64),
-    ]
-    max_len = max(e.shape[1] for e in expressions_list)
-    expressions = torch.full((len(expressions_list), max_len), int(Operator.NO_OP), dtype=torch.int64, device=pcfg.device)
-    for i, e in enumerate(expressions_list):
-        expressions[i, :e.shape[1]] = e
-
-    batch_ops, batch_children = pcfg.parse_to_prefix(expressions)
-
-    for i, expr in enumerate(expressions_list):
-        single_ops, single_children = pcfg.parse_to_prefix(expr.to(pcfg.device))
-        len_single_ops = single_ops.shape[1]
-        # Check that the output is correct
-        assert torch.equal(batch_ops[i, :len_single_ops], single_ops[0])
-        assert torch.equal(batch_children[i, :len_single_ops], single_children[0])
-        # Check padding
-        assert torch.all(batch_ops[i, len_single_ops:] == int(Operator.NO_OP))
-
-
-def test_parse_to_postfix_max_length(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_max_length(pcfg: ProbabilisticContextFreeGrammar):
     # Create an expression of max length (128)
     # e.g. 1 + 1 + ... + 1 (64 ones, 63 pluses) -> 127 length
     num_ones = 64
@@ -440,7 +315,8 @@ def test_parse_to_postfix_max_length(pcfg: ProbabilisticContextFreeGrammar):
     expression = torch.tensor([expr_list], dtype=torch.int64, device=pcfg.device)
     assert expression.shape[1] == 2 * num_ones - 1
 
-    ops, children = pcfg.parse_to_postfix(expression)
+    ops = pcfg.infix_to_postfix(expression)
+    children = pcfg.get_postfix_children(ops)
 
     # Check that it doesn't error out and the result is plausible
     # The postfix should be 1, 1, +, 1, +, ..., 1, +
@@ -450,7 +326,7 @@ def test_parse_to_postfix_max_length(pcfg: ProbabilisticContextFreeGrammar):
     assert ops[0, -1] == int(Operator.ADD) # last op is Operator.ADD
 
 
-def test_parse_to_prefix_max_length(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_max_length(pcfg: ProbabilisticContextFreeGrammar):
     # Create an expression of max length (128)
     # e.g. 1 + 1 + ... + 1 (64 ones, 63 pluses) -> 127 length
     num_ones = 64
@@ -461,13 +337,14 @@ def test_parse_to_prefix_max_length(pcfg: ProbabilisticContextFreeGrammar):
     expression = torch.tensor([expr_list], dtype=torch.int64, device=pcfg.device)
     assert expression.shape[1] == 2 * num_ones - 1
 
-    ops, children = pcfg.parse_to_prefix(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     # Check that it doesn't error out and the result is plausible
     # The prefix should be + + ... + 1 1 ... 1
     # Total length is also 127
     assert ops.shape[1] == 2 * num_ones - 1
-    assert children.shape[1] == 2 * num_ones - 1
+    assert parents.shape[1] == 2 * num_ones - 1
     assert ops[0, 0] == int(Operator.ADD) # first op is Operator.ADD
 
 @pytest.mark.large
@@ -502,21 +379,21 @@ def test_benchmark_parsing_cpu_vs_cuda():
     expressions_cuda = expressions.to(f"cuda:{index}")
 
     # Warmup
-    pcfg_cpu.parse_to_postfix(expressions_cpu)
-    pcfg_cuda.parse_to_postfix(expressions_cuda)
+    pcfg_cpu.infix_to_postfix(expressions_cpu)
+    pcfg_cuda.infix_to_postfix(expressions_cuda)
     torch.cuda.synchronize(device=f"cuda:{index}")
 
     # CPU benchmark
     start_time = time.time()
     for _ in range(N_BENCH_LOOPS):
-        pcfg_cpu.parse_to_postfix(expressions_cpu)
+        pcfg_cpu.infix_to_postfix(expressions_cpu)
     cpu_time = (time.time() - start_time) / N_BENCH_LOOPS
     print(f"\nCPU parsing time: {cpu_time:.4f}s")
 
     # CUDA benchmark
     start_time = time.time()
     for _ in range(N_BENCH_LOOPS):
-        pcfg_cuda.parse_to_postfix(expressions_cuda)
+        pcfg_cuda.infix_to_postfix(expressions_cuda)
     torch.cuda.synchronize(device=f"cuda:{index}")
     cuda_time = (time.time() - start_time) / N_BENCH_LOOPS
     print(f"CUDA parsing time: {cuda_time:.4f}s")
@@ -527,42 +404,22 @@ def test_benchmark_parsing_cpu_vs_cuda():
 # Tests for parent-pointer parsing functions
 # ===============================================
 
-def test_parse_to_postfix_parent_constant(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_constant(pcfg: ProbabilisticContextFreeGrammar):
     expression = torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_postfix_parent(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
     
     assert torch.equal(ops[:, :1], expression)
     assert torch.equal(parents[:, 0], torch.tensor([NULL_PARENT], dtype=torch.int64, device=pcfg.device))
-
-
-def test_parse_to_prefix_parent_constant(pcfg: ProbabilisticContextFreeGrammar):
-    expression = torch.tensor([[int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_prefix_parent(expression)
-    
-    assert torch.equal(ops[:, :1], expression)
-    assert torch.equal(parents[:, 0], torch.tensor([NULL_PARENT], dtype=torch.int64, device=pcfg.device))
-
-
-@pytest.mark.parametrize("op_id", [int(Operator.SIN), int(Operator.COS), int(Operator.EXP), int(Operator.LOG), int(Operator.SQRT), int(Operator.SQUARE), int(Operator.TAN), int(Operator.ARCSIN), int(Operator.ARCCOS), int(Operator.ARCTAN), int(Operator.SINH), int(Operator.COSH), int(Operator.TANH), int(Operator.FLOOR), int(Operator.CEIL), int(Operator.LN), int(Operator.LOG10), int(Operator.NEG), int(Operator.INV), int(Operator.CUBE), int(Operator.FOURTH), int(Operator.FIFTH)])
-def test_parse_to_postfix_parent_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
-    LPAREN = pcfg.get_symbol_id('(')
-    RPAREN = pcfg.get_symbol_id(')')
-    expression = torch.tensor([[op_id, LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_postfix_parent(expression)
-
-    expected_ops = torch.tensor([[int(Operator.CONST_1), op_id]], dtype=torch.int64, device=pcfg.device)
-    expected_parents = torch.tensor([[1, NULL_PARENT]], dtype=torch.int64, device=pcfg.device)
-
-    assert torch.equal(ops[:, :2], expected_ops)
-    assert torch.equal(parents[:, :2], expected_parents)
 
 
 @pytest.mark.parametrize("op_id", [Operator.SIN, Operator.COS, Operator.EXP, Operator.LOG, Operator.SQRT, Operator.SQUARE, Operator.TAN, Operator.ARCSIN, Operator.ARCCOS, Operator.ARCTAN, Operator.SINH, Operator.COSH, Operator.TANH, Operator.FLOOR, Operator.CEIL, Operator.LN, Operator.LOG10, Operator.NEG, Operator.INV, Operator.CUBE, Operator.FOURTH, Operator.FIFTH])
-def test_parse_to_prefix_parent_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_unary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
     expression = torch.tensor([[op_id, LPAREN, int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_prefix_parent(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     expected_ops = torch.tensor([[op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
     expected_parents = torch.tensor([[NULL_PARENT, 0]], dtype=torch.int64, device=pcfg.device)
@@ -570,23 +427,11 @@ def test_parse_to_prefix_parent_unary(op_id: int, pcfg: ProbabilisticContextFree
     assert torch.equal(ops[:, :2], expected_ops)
     assert torch.equal(parents[:, :2], expected_parents)
 
-
 @pytest.mark.parametrize("op_id", [Operator.ADD, Operator.SUB, Operator.MUL, Operator.DIV, Operator.POW])
-def test_parse_to_postfix_parent_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
     expression = torch.tensor([[int(Operator.CONST_1), op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_postfix_parent(expression)
-
-    expected_ops = torch.tensor([[int(Operator.CONST_1), int(Operator.CONST_1), op_id]], dtype=torch.int64, device=pcfg.device)
-    expected_parents = torch.tensor([[2, 2, NULL_PARENT]], dtype=torch.int64, device=pcfg.device)
-
-    assert torch.equal(ops[:, :3], expected_ops)
-    assert torch.equal(parents[:, :3], expected_parents)
-
-
-@pytest.mark.parametrize("op_id", [Operator.ADD, Operator.SUB, Operator.MUL, Operator.DIV, Operator.POW])
-def test_parse_to_prefix_parent_binary(op_id: int, pcfg: ProbabilisticContextFreeGrammar):
-    expression = torch.tensor([[int(Operator.CONST_1), op_id, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_prefix_parent(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     expected_ops = torch.tensor([[op_id, int(Operator.CONST_1), int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
     expected_parents = torch.tensor([[NULL_PARENT, 0, 0]], dtype=torch.int64, device=pcfg.device)
@@ -594,35 +439,14 @@ def test_parse_to_prefix_parent_binary(op_id: int, pcfg: ProbabilisticContextFre
     assert torch.equal(ops[:, :3], expected_ops)
     assert torch.equal(parents[:, :3], expected_parents)
 
-
-def test_parse_to_postfix_parent_all_operators(pcfg: ProbabilisticContextFreeGrammar):
-    LPAREN = pcfg.get_symbol_id('(')
-    RPAREN = pcfg.get_symbol_id(')')
-    # (sin(X_0) + 1) * (log(X_0) - 1)
-    X_0 = int(Operator.VAR_START_ID)
-    expression = torch.tensor([[
-        LPAREN, int(Operator.SIN), LPAREN, X_0, RPAREN, int(Operator.ADD), int(Operator.CONST_1), RPAREN,
-        int(Operator.MUL),
-        LPAREN, int(Operator.LOG), LPAREN, X_0, RPAREN, int(Operator.SUB), int(Operator.CONST_1), RPAREN
-    ]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_postfix_parent(expression)
-
-    # Postfix ops: [X_0, sin, 1, +, X_0, log, 1, -, *]
-    expected_ops = torch.tensor([[X_0, int(Operator.SIN), int(Operator.CONST_1), int(Operator.ADD), X_0, int(Operator.LOG), int(Operator.CONST_1), int(Operator.SUB), int(Operator.MUL)]], dtype=torch.int64, device=pcfg.device)
-    # Postfix parents: [1, 3, 3, 8, 5, 7, 7, 8, NP]
-    expected_parents = torch.tensor([[1, 3, 3, 8, 5, 7, 7, 8, NULL_PARENT]], dtype=torch.int64, device=pcfg.device)
-
-    assert torch.equal(ops[:, :9], expected_ops)
-    assert torch.equal(parents[:, :9], expected_parents)
-
-
-def test_parse_to_prefix_parent_all_operators(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_all_operators(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
     # (sin(X_0) + 1) * (log(X_0) - 1)
     X_0 = int(Operator.VAR_START_ID)
     expression = torch.tensor([[LPAREN, int(Operator.SIN), LPAREN, X_0, RPAREN, int(Operator.ADD), int(Operator.CONST_1), RPAREN, int(Operator.MUL), LPAREN, int(Operator.LOG), LPAREN, X_0, RPAREN, int(Operator.SUB), int(Operator.CONST_1), RPAREN]], dtype=torch.int64, device=pcfg.device)
-    ops, parents = pcfg.parse_to_prefix_parent(expression)
+    ops = pcfg.infix_to_prefix(expression)
+    parents = pcfg.get_prefix_parent(ops)
 
     # Prefix ops: [*, +, sin, X_0, 1, -, log, X_0, 1]
     expected_ops = torch.tensor([[int(Operator.MUL), int(Operator.ADD), int(Operator.SIN), X_0, int(Operator.CONST_1), int(Operator.SUB), int(Operator.LOG), X_0, int(Operator.CONST_1)]], dtype=torch.int64, device=pcfg.device)
@@ -633,7 +457,7 @@ def test_parse_to_prefix_parent_all_operators(pcfg: ProbabilisticContextFreeGram
     assert torch.equal(parents[:, :9], expected_parents)
 
 
-def test_parse_to_postfix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_postfix_batch(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
 
@@ -648,20 +472,23 @@ def test_parse_to_postfix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
     for i, e in enumerate(expressions_list):
         expressions[i, :e.shape[1]] = e
 
-    batch_ops, batch_parents = pcfg.parse_to_postfix_parent(expressions)
+    batch_ops = pcfg.infix_to_postfix(expressions)
+    batch_children = pcfg.get_postfix_children(batch_ops)
+    
 
     for i, expr in enumerate(expressions_list):
-        single_ops, single_parents = pcfg.parse_to_postfix_parent(expr.to(pcfg.device))
+        single_ops = pcfg.infix_to_postfix(expr.to(pcfg.device))
+        single_children = pcfg.get_postfix_children(single_ops)
         len_single_ops = single_ops.shape[1]
         # Check that the output is correct
         assert torch.equal(batch_ops[i, :len_single_ops], single_ops[0])
-        assert torch.equal(batch_parents[i, :len_single_ops], single_parents[0])
+        assert torch.equal(batch_children[i, :len_single_ops], single_children[0])
         # Check padding
         assert torch.all(batch_ops[i, len_single_ops:] == int(Operator.NO_OP))
-        assert torch.all(batch_parents[i, len_single_ops:] == int(Operator.NO_OP))
+        assert torch.all(batch_children[i, len_single_ops:] == NULL_CHILD)
 
 
-def test_parse_to_prefix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
+def test_infix_to_prefix_batch(pcfg: ProbabilisticContextFreeGrammar):
     LPAREN = pcfg.get_symbol_id('(')
     RPAREN = pcfg.get_symbol_id(')')
     expressions_list = [
@@ -675,17 +502,19 @@ def test_parse_to_prefix_parent_batch(pcfg: ProbabilisticContextFreeGrammar):
     for i, e in enumerate(expressions_list):
         expressions[i, :e.shape[1]] = e
 
-    batch_ops, batch_parents = pcfg.parse_to_prefix_parent(expressions)
+    batch_ops = pcfg.infix_to_prefix(expressions)
+    batch_parents = pcfg.get_prefix_parent(batch_ops)
 
     for i, expr in enumerate(expressions_list):
-        single_ops, single_parents = pcfg.parse_to_prefix_parent(expr.to(pcfg.device))
+        single_ops = pcfg.infix_to_prefix(expr.to(pcfg.device))
+        single_parents = pcfg.get_prefix_parent(single_ops)
         len_single_ops = single_ops.shape[1]
         # Check that the output is correct
         assert torch.equal(batch_ops[i, :len_single_ops], single_ops[0])
         assert torch.equal(batch_parents[i, :len_single_ops], single_parents[0])
         # Check padding
         assert torch.all(batch_ops[i, len_single_ops:] == int(Operator.NO_OP))
-        assert torch.all(batch_parents[i, len_single_ops:] == int(Operator.NO_OP))
+        assert torch.all(batch_parents[i, len_single_ops:] == NULL_PARENT)
 
 @pytest.mark.large
 def test_benchmark_parsing_parent_cpu_vs_cuda():
@@ -715,21 +544,21 @@ def test_benchmark_parsing_parent_cpu_vs_cuda():
     expressions_cuda = expressions.to(f"cuda:{index}")
 
     # Warmup
-    pcfg_cpu.parse_to_postfix_parent(expressions_cpu)
-    pcfg_cuda.parse_to_postfix_parent(expressions_cuda)
+    pcfg_cpu.infix_to_postfix(expressions_cpu)
+    pcfg_cuda.infix_to_postfix(expressions_cuda)
     torch.cuda.synchronize(device=f"cuda:{index}")
 
     # CPU benchmark
     start_time = time.time()
     for _ in range(N_BENCH_LOOPS):
-        pcfg_cpu.parse_to_postfix_parent(expressions_cpu)
+        pcfg_cpu.infix_to_postfix(expressions_cpu)
     cpu_time = (time.time() - start_time) / N_BENCH_LOOPS
     print(f"\nCPU parent parsing time: {cpu_time:.4f}s")
 
     # CUDA benchmark
     start_time = time.time()
     for _ in range(N_BENCH_LOOPS):
-        pcfg_cuda.parse_to_postfix_parent(expressions_cuda)
+        pcfg_cuda.infix_to_postfix(expressions_cuda)
     torch.cuda.synchronize(device=f"cuda:{index}")
     cuda_time = (time.time() - start_time) / N_BENCH_LOOPS
     print(f"CUDA parent parsing time: {cuda_time:.4f}s")
@@ -761,7 +590,7 @@ def test_parsing_error_verbosity(pcfg: ProbabilisticContextFreeGrammar):
 
     # --- Test verbosity=0 (default, summary only) ---
     with pytest.raises(RuntimeError) as excinfo:
-        pcfg.parse_to_postfix(expressions_tensor, verbosity=0)
+        pcfg.infix_to_postfix(expressions_tensor, verbosity=0)
     
     err_str_v0 = str(excinfo.value)
     assert "Error Summary:" in err_str_v0
@@ -772,7 +601,7 @@ def test_parsing_error_verbosity(pcfg: ProbabilisticContextFreeGrammar):
 
     # --- Test verbosity=1 (summary + up to 5 examples) ---
     with pytest.raises(RuntimeError) as excinfo:
-        pcfg.parse_to_postfix(expressions_tensor, verbosity=1)
+        pcfg.infix_to_postfix(expressions_tensor, verbosity=1)
         
     err_str_v1 = str(excinfo.value)
     assert "Error Summary:" in err_str_v1
@@ -787,7 +616,7 @@ def test_parsing_error_verbosity(pcfg: ProbabilisticContextFreeGrammar):
     
     # --- Test verbosity=2 (summary + all examples) ---
     with pytest.raises(RuntimeError) as excinfo:
-        pcfg.parse_to_postfix(expressions_tensor, verbosity=2)
+        pcfg.infix_to_postfix(expressions_tensor, verbosity=2)
 
     err_str_v2 = str(excinfo.value)
     # Since we have < 5 errors, output should be identical to verbosity=1

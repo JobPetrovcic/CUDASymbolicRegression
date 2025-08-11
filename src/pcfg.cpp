@@ -569,7 +569,7 @@ void ProbabilisticContextFreeGrammar::process_parsing_errors(const torch::Tensor
     throw std::runtime_error(ss.str());
 }
 
-torch::Tensor ProbabilisticContextFreeGrammar::sample_string_expression(int64_t B)
+torch::Tensor ProbabilisticContextFreeGrammar::sample_infix(int64_t B)
 {
     auto output = torch::empty({B, padded_maximum_length}, torch::TensorOptions().dtype(torch::kInt64).device(device));
     auto errors = torch::empty({B}, torch::TensorOptions().dtype(torch::kInt64).device(device));
@@ -580,7 +580,7 @@ torch::Tensor ProbabilisticContextFreeGrammar::sample_string_expression(int64_t 
 
     if (device.is_cuda())
     {
-        pcfg_sample_string_expression_cuda_impl(
+        sample_infix_cuda_impl(
             this->rule_lhs.packed_accessor32<int64_t, 1>(),
             this->rhs_ptr.packed_accessor32<int64_t, 1>(),
             this->rhs_concat.packed_accessor32<int64_t, 1>(),
@@ -596,7 +596,7 @@ torch::Tensor ProbabilisticContextFreeGrammar::sample_string_expression(int64_t 
     }
     else
     {
-        pcfg_sample_string_expression_cpu_impl(
+        sample_infix_cpu_impl(
             this->rule_lhs.accessor<int64_t, 1>(),
             this->rhs_ptr.accessor<int64_t, 1>(),
             this->rhs_concat.accessor<int64_t, 1>(),
@@ -633,13 +633,33 @@ torch::Tensor ProbabilisticContextFreeGrammar::sample_string_expression(int64_t 
     return output;
 }
 
-std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_prefix(torch::Tensor expressions, int verbosity)
+void ProbabilisticContextFreeGrammar::infix_checks(torch::Tensor infix_ops)
 {
-    // Check that only terminal symbols are used
-    TORCH_CHECK((0 <= expressions).all().item<bool>(),
-                "All symbols in the expressions must be non-negative integers.");
-    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
-                "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
+    TORCH_CHECK((0 <= infix_ops).all().item<bool>(),
+                "All symbols in the infix_ops must be non-negative integers.");
+    TORCH_CHECK((infix_ops < this->terminal_limit).all().item<bool>(),
+                "All symbols in the infix_ops must be terminal symbols (less than terminal_limit).");
+}
+
+void ProbabilisticContextFreeGrammar::prefix_checks(torch::Tensor prefix_ops)
+{
+    TORCH_CHECK((0 <= prefix_ops).all().item<bool>(),
+                "All symbols in the prefix_ops must be non-negative integers.");
+    TORCH_CHECK((prefix_ops < this->n_operators).all().item<bool>(),
+                "All symbols in the prefix_ops must be valid operator IDs.");
+}
+
+void ProbabilisticContextFreeGrammar::postfix_checks(torch::Tensor postfix_ops)
+{
+    TORCH_CHECK((0 <= postfix_ops).all().item<bool>(),
+                "All symbols in the postfix_ops must be non-negative integers.");
+    TORCH_CHECK((postfix_ops < this->n_operators).all().item<bool>(),
+                "All symbols in the postfix_ops must be valid operator IDs.");
+}
+
+torch::Tensor ProbabilisticContextFreeGrammar::infix_to_prefix(torch::Tensor expressions, int verbosity)
+{
+    infix_checks(expressions);
 
     int64_t B = expressions.size(0);
     int64_t M = expressions.size(1);
@@ -650,7 +670,6 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
     }
 
     auto ops = torch::full({B, M}, NO_OP, expressions.options());
-    auto children = torch::full({B, M, 2}, NULL_CHILD, expressions.options());
     auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
 
     int64_t lparenthesis_id = get_token_id("(");
@@ -658,11 +677,10 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
 
     if (device.is_cuda())
     {
-        parse_to_prefix_cuda_impl(
+        infix_to_prefix_cuda_impl(
             this->precedence.packed_accessor32<int64_t, 1>(),
             expressions.packed_accessor32<int64_t, 2>(),
             ops.packed_accessor32<int64_t, 2>(),
-            children.packed_accessor32<int64_t, 3>(),
             errors.packed_accessor32<int64_t, 1>(),
             lparenthesis_id,
             rparenthesis_id,
@@ -671,11 +689,10 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
     }
     else
     {
-        parse_to_prefix_cpu_impl(
+        infix_to_prefix_cpu_impl(
             this->precedence.accessor<int64_t, 1>(),
             expressions.accessor<int64_t, 2>(),
             ops.accessor<int64_t, 2>(),
-            children.accessor<int64_t, 3>(),
             errors.accessor<int64_t, 1>(),
             lparenthesis_id,
             rparenthesis_id,
@@ -685,16 +702,13 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
 
     process_parsing_errors(errors, expressions, "prefix parsing", verbosity);
 
-    return std::make_tuple(ops, children);
+    return ops;
 }
 
-std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_prefix_parent(torch::Tensor expressions, int verbosity)
+torch::Tensor ProbabilisticContextFreeGrammar::infix_to_postfix(torch::Tensor expressions, int verbosity)
 {
     // Check that only terminal symbols are used
-    TORCH_CHECK((0 <= expressions).all().item<bool>(),
-                "All symbols in the expressions must be non-negative integers.");
-    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
-                "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
+    infix_checks(expressions);
 
     int64_t B = expressions.size(0);
     int64_t M = expressions.size(1);
@@ -705,7 +719,6 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
     }
 
     auto ops = torch::full({B, M}, NO_OP, expressions.options());
-    auto parents = torch::full({B, M}, NULL_CHILD, expressions.options());
     auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
 
     int64_t lparenthesis_id = get_token_id("(");
@@ -713,11 +726,10 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
 
     if (device.is_cuda())
     {
-        parse_to_prefix_parent_cuda_impl(
+        infix_to_postfix_cuda_impl(
             this->precedence.packed_accessor32<int64_t, 1>(),
             expressions.packed_accessor32<int64_t, 2>(),
             ops.packed_accessor32<int64_t, 2>(),
-            parents.packed_accessor32<int64_t, 2>(),
             errors.packed_accessor32<int64_t, 1>(),
             lparenthesis_id,
             rparenthesis_id,
@@ -726,66 +738,10 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
     }
     else
     {
-        parse_to_prefix_parent_cpu_impl(
+        infix_to_postfix_cpu_impl(
             this->precedence.accessor<int64_t, 1>(),
             expressions.accessor<int64_t, 2>(),
             ops.accessor<int64_t, 2>(),
-            parents.accessor<int64_t, 2>(),
-            errors.accessor<int64_t, 1>(),
-            lparenthesis_id,
-            rparenthesis_id,
-            B,
-            M);
-    }
-
-    process_parsing_errors(errors, expressions, "prefix parent parsing", verbosity);
-
-    return std::make_tuple(ops, parents);
-}
-
-std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_postfix(torch::Tensor expressions, int verbosity)
-{
-    // Check that only terminal symbols are used
-    TORCH_CHECK((0 <= expressions).all().item<bool>(),
-                "All symbols in the expressions must be non-negative integers.");
-    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
-                "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
-
-    int64_t B = expressions.size(0);
-    int64_t M = expressions.size(1);
-
-    if (M > HARD_MAX_LENGTH)
-    {
-        throw std::invalid_argument("M must be less than or equal to HARD_MAX_LENGTH, but got " + std::to_string(M) + " > " + std::to_string(HARD_MAX_LENGTH) + ".");
-    }
-
-    auto ops = torch::full({B, M}, NO_OP, expressions.options());
-    auto children = torch::full({B, M, 2}, NULL_CHILD, expressions.options());
-    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
-
-    int64_t lparenthesis_id = get_token_id("(");
-    int64_t rparenthesis_id = get_token_id(")");
-
-    if (device.is_cuda())
-    {
-        parse_to_postfix_cuda_impl(
-            this->precedence.packed_accessor32<int64_t, 1>(),
-            expressions.packed_accessor32<int64_t, 2>(),
-            ops.packed_accessor32<int64_t, 2>(),
-            children.packed_accessor32<int64_t, 3>(),
-            errors.packed_accessor32<int64_t, 1>(),
-            lparenthesis_id,
-            rparenthesis_id,
-            B,
-            M);
-    }
-    else
-    {
-        parse_to_postfix_cpu_impl(
-            this->precedence.accessor<int64_t, 1>(),
-            expressions.accessor<int64_t, 2>(),
-            ops.accessor<int64_t, 2>(),
-            children.accessor<int64_t, 3>(),
             errors.accessor<int64_t, 1>(),
             lparenthesis_id,
             rparenthesis_id,
@@ -795,16 +751,7 @@ std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_
 
     process_parsing_errors(errors, expressions, "postfix parsing", verbosity);
 
-    return std::make_tuple(ops, children);
-}
-
-std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::sample(int64_t B, int verbosity)
-{
-    if (B <= 0)
-        throw std::invalid_argument("Batch size B must be greater than 0, but got " + std::to_string(B) + ".");
-
-    auto string_samples = sample_string_expression(B);
-    return parse_to_postfix(string_samples, verbosity);
+    return ops;
 }
 
 std::vector<std::string> ProbabilisticContextFreeGrammar::to_string(torch::Tensor expressions)
@@ -840,61 +787,6 @@ std::vector<std::string> ProbabilisticContextFreeGrammar::to_string(torch::Tenso
     return results;
 }
 
-std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::parse_to_postfix_parent(torch::Tensor expressions, int verbosity)
-{
-    // Check that only terminal symbols are used
-    TORCH_CHECK((0 <= expressions).all().item<bool>(),
-                "All symbols in the expressions must be non-negative integers.");
-    TORCH_CHECK((expressions < this->terminal_limit).all().item<bool>(),
-                "All symbols in the expressions must be terminal symbols (less than terminal_limit).");
-
-    int64_t B = expressions.size(0);
-    int64_t M = expressions.size(1);
-
-    if (M > HARD_MAX_LENGTH)
-    {
-        throw std::invalid_argument("M must be less than or equal to HARD_MAX_LENGTH, but got " + std::to_string(M) + " > " + std::to_string(HARD_MAX_LENGTH) + ".");
-    }
-
-    auto ops = torch::full({B, M}, NO_OP, expressions.options());
-    auto parents = torch::full({B, M}, NULL_CHILD, expressions.options());
-    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
-
-    int64_t lparenthesis_id = get_token_id("(");
-    int64_t rparenthesis_id = get_token_id(")");
-
-    if (device.is_cuda())
-    {
-        parse_to_postfix_parent_cuda_impl(
-            this->precedence.packed_accessor32<int64_t, 1>(),
-            expressions.packed_accessor32<int64_t, 2>(),
-            ops.packed_accessor32<int64_t, 2>(),
-            parents.packed_accessor32<int64_t, 2>(),
-            errors.packed_accessor32<int64_t, 1>(),
-            lparenthesis_id,
-            rparenthesis_id,
-            B,
-            M);
-    }
-    else
-    {
-        parse_to_postfix_parent_cpu_impl(
-            this->precedence.accessor<int64_t, 1>(),
-            expressions.accessor<int64_t, 2>(),
-            ops.accessor<int64_t, 2>(),
-            parents.accessor<int64_t, 2>(),
-            errors.accessor<int64_t, 1>(),
-            lparenthesis_id,
-            rparenthesis_id,
-            B,
-            M);
-    }
-
-    process_parsing_errors(errors, expressions, "postfix parent parsing", verbosity);
-
-    return std::make_tuple(ops, parents);
-}
-
 torch::Tensor ProbabilisticContextFreeGrammar::postfix_to_infix(torch::Tensor expressions, int64_t max_infix_len, int verbosity)
 {
     int64_t B = expressions.size(0);
@@ -908,10 +800,7 @@ torch::Tensor ProbabilisticContextFreeGrammar::postfix_to_infix(torch::Tensor ex
 
     TORCH_CHECK(expressions.device() == device,
                 "Input tensor must be on the same device as the PCFG, but got input on " + expressions.device().str() + " and PCFG on " + device.str() + ".");
-    TORCH_CHECK((0 <= expressions).all().item<bool>(),
-                "All symbols in the expressions must be non-negative integers.");
-    TORCH_CHECK((expressions < this->n_operators).all().item<bool>(),
-                "All symbols in the expressions must be valid operator IDs.");
+    prefix_checks(expressions);
 
     if (device.is_cuda())
     {
@@ -947,6 +836,8 @@ torch::Tensor ProbabilisticContextFreeGrammar::prefix_to_infix(torch::Tensor exp
     int64_t lparen_id = get_symbol_id("(");
     int64_t rparen_id = get_symbol_id(")");
 
+    prefix_checks(expressions);
+
     if (device.is_cuda())
     {
         prefix_to_infix_cuda_impl(
@@ -970,36 +861,128 @@ torch::Tensor ProbabilisticContextFreeGrammar::prefix_to_infix(torch::Tensor exp
     return infix_out;
 }
 
-std::tuple<torch::Tensor, torch::Tensor> ProbabilisticContextFreeGrammar::prefix_to_postfix_parent(torch::Tensor expressions, int verbosity)
+torch::Tensor ProbabilisticContextFreeGrammar::prefix_to_postfix(torch::Tensor expressions, int verbosity)
 {
     int64_t B = expressions.size(0);
     int64_t M_prefix = expressions.size(1);
 
     auto postfix_out = torch::full({B, M_prefix}, NO_OP, expressions.options());
-    auto parents_out = torch::full({B, M_prefix}, NULL_PARENT, expressions.options());
     auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    prefix_checks(expressions);
 
     if (device.is_cuda())
     {
-        prefix_to_postfix_parent_cuda_impl(
+        prefix_to_postfix_cuda_impl(
             expressions.packed_accessor32<int64_t, 2>(),
             postfix_out.packed_accessor32<int64_t, 2>(),
-            parents_out.packed_accessor32<int64_t, 2>(),
             errors.packed_accessor32<int64_t, 1>(),
-            B, M_prefix, M_prefix);
+            B, M_prefix);
     }
     else
     {
-        prefix_to_postfix_parent_cpu_impl(
+        prefix_to_postfix_cpu_impl(
             expressions.accessor<int64_t, 2>(),
             postfix_out.accessor<int64_t, 2>(),
-            parents_out.accessor<int64_t, 2>(),
             errors.accessor<int64_t, 1>(),
-            B, M_prefix, M_prefix);
+            B, M_prefix);
     }
 
     process_parsing_errors(errors, expressions, "prefix to postfix parent conversion", verbosity);
-    return std::make_tuple(postfix_out, parents_out);
+    return postfix_out;
+}
+
+torch::Tensor ProbabilisticContextFreeGrammar::postfix_to_prefix(torch::Tensor expressions, int verbosity)
+{
+    int64_t B = expressions.size(0);
+    int64_t M_postfix = expressions.size(1);
+
+    auto prefix_out = torch::full({B, M_postfix}, NO_OP, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    postfix_checks(expressions);
+
+    if (device.is_cuda())
+    {
+        postfix_to_prefix_cuda_impl(
+            expressions.packed_accessor32<int64_t, 2>(),
+            prefix_out.packed_accessor32<int64_t, 2>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            B, M_postfix);
+    }
+    else
+    {
+        postfix_to_prefix_cpu_impl(
+            expressions.accessor<int64_t, 2>(),
+            prefix_out.accessor<int64_t, 2>(),
+            errors.accessor<int64_t, 1>(),
+            B, M_postfix);
+    }
+
+    process_parsing_errors(errors, expressions, "postfix to prefix parent conversion", verbosity);
+    return prefix_out;
+}
+
+torch::Tensor ProbabilisticContextFreeGrammar::get_prefix_parent(torch::Tensor expressions, int verbosity)
+{
+    int64_t B = expressions.size(0);
+    int64_t M_prefix = expressions.size(1);
+
+    auto parents = torch::full({B, M_prefix}, NULL_CHILD, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    prefix_checks(expressions);
+
+    if (device.is_cuda())
+    {
+        get_prefix_parent_cuda_impl(
+            expressions.packed_accessor32<int64_t, 2>(),
+            parents.packed_accessor32<int64_t, 2>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            B, M_prefix);
+    }
+    else
+    {
+        get_prefix_parent_cpu_impl(
+            expressions.accessor<int64_t, 2>(),
+            parents.accessor<int64_t, 2>(),
+            errors.accessor<int64_t, 1>(),
+            B, M_prefix);
+    }
+
+    process_parsing_errors(errors, expressions, "get prefix parent", verbosity);
+    return parents;
+}
+
+torch::Tensor ProbabilisticContextFreeGrammar::get_postfix_children(torch::Tensor expressions, int verbosity)
+{
+    int64_t B = expressions.size(0);
+    int64_t M_postfix = expressions.size(1);
+
+    auto children = torch::full({B, M_postfix, MAX_ARITY}, NULL_CHILD, expressions.options());
+    auto errors = torch::zeros({B}, expressions.options().dtype(torch::kInt64));
+
+    postfix_checks(expressions);
+
+    if (device.is_cuda())
+    {
+        get_postfix_children_cuda_impl(
+            expressions.packed_accessor32<int64_t, 2>(),
+            children.packed_accessor32<int64_t, 3>(),
+            errors.packed_accessor32<int64_t, 1>(),
+            B, M_postfix);
+    }
+    else
+    {
+        get_postfix_children_cpu_impl(
+            expressions.accessor<int64_t, 2>(),
+            children.accessor<int64_t, 3>(),
+            errors.accessor<int64_t, 1>(),
+            B, M_postfix);
+    }
+
+    process_parsing_errors(errors, expressions, "get postfix children", verbosity);
+    return children;
 }
 
 std::vector<std::string> ProbabilisticContextFreeGrammar::available_operators() const
@@ -1032,21 +1015,15 @@ void init_pcfg(pybind11::module &m)
              pybind11::arg("max_tries") = 64,
              pybind11::arg("tolerance") = DEFAULT_tolerence,
              pybind11::arg("verbose") = false)
-        .def("sample", &ProbabilisticContextFreeGrammar::sample, "Sample from the PCFG",
-             pybind11::arg("B"),
-             pybind11::arg("verbosity") = 0)
-        .def("sample_string_expression", &ProbabilisticContextFreeGrammar::sample_string_expression, "Sample a string expression from the PCFG")
+        .def("sample_infix", &ProbabilisticContextFreeGrammar::sample_infix, "Sample a string expression from the PCFG")
         .def("to_string", &ProbabilisticContextFreeGrammar::to_string, "Convert a tensor of expressions to a list of strings")
-        .def("parse_to_postfix", &ProbabilisticContextFreeGrammar::parse_to_postfix, "Parse a string expression to a postfix representation with child pointers",
+        .def("infix_to_postfix", &ProbabilisticContextFreeGrammar::infix_to_postfix, "Parse a string expression to a postfix representation with child pointers",
              pybind11::arg("expressions"),
              pybind11::arg("verbosity") = 0)
-        .def("parse_to_postfix_parent", &ProbabilisticContextFreeGrammar::parse_to_postfix_parent, "Parse a string expression to a postfix representation with parent pointers",
+        .def("infix_to_postfix", &ProbabilisticContextFreeGrammar::infix_to_postfix, "Parse a string expression to a postfix representation with parent pointers",
              pybind11::arg("expressions"),
              pybind11::arg("verbosity") = 0)
-        .def("parse_to_prefix", &ProbabilisticContextFreeGrammar::parse_to_prefix, "Parse a string expression to a prefix representation with child pointers",
-             pybind11::arg("expressions"),
-             pybind11::arg("verbosity") = 0)
-        .def("parse_to_prefix_parent", &ProbabilisticContextFreeGrammar::parse_to_prefix_parent, "Parse a string expression to a prefix representation with parent pointers",
+        .def("infix_to_prefix", &ProbabilisticContextFreeGrammar::infix_to_prefix, "Parse a string expression to a prefix representation with child pointers",
              pybind11::arg("expressions"),
              pybind11::arg("verbosity") = 0)
         .def("postfix_to_infix", &ProbabilisticContextFreeGrammar::postfix_to_infix, "Convert a batch of postfix expressions to infix tensors.",
@@ -1057,8 +1034,15 @@ void init_pcfg(pybind11::module &m)
              pybind11::arg("expressions"),
              pybind11::arg("max_infix_len"),
              pybind11::arg("verbosity") = 0)
-        .def("prefix_to_postfix_parent", &ProbabilisticContextFreeGrammar::prefix_to_postfix_parent, "Convert a batch of prefix expressions to postfix tensors with parent pointers.",
+        .def("prefix_to_postfix", &ProbabilisticContextFreeGrammar::prefix_to_postfix, "Convert a batch of prefix expressions to postfix tensors with parent pointers.",
              pybind11::arg("expressions"),
+             pybind11::arg("verbosity") = 0)
+
+        .def("get_prefix_parent", &ProbabilisticContextFreeGrammar::get_prefix_parent, "Get the parent of each operator in a prefix expression",
+             pybind11::arg("prefix_ops"),
+             pybind11::arg("verbosity") = 0)
+        .def("get_postfix_children", &ProbabilisticContextFreeGrammar::get_postfix_children, "Get the children of each operator in a postfix expression",
+             pybind11::arg("postfix_ops"),
              pybind11::arg("verbosity") = 0)
 
         .def_readonly("device", &ProbabilisticContextFreeGrammar::device)

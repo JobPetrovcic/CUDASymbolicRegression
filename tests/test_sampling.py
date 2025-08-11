@@ -50,7 +50,7 @@ P -> ^2 [1.0]
 def test_simple_grammar(device: Literal["cpu", "cuda"]):
     grammar = f"S -> 1 [1.0]"
     pcfg = ProbabilisticContextFreeGrammar(grammar, "S", 1, 0, torch.device(device))
-    samples = pcfg.sample_string_expression(10)
+    samples = pcfg.sample_infix(10)
     strings = pcfg.to_string(samples)
     # Assert that samples is a constant tensor of the with value Operator.CONST_1
     assert samples.shape == (10, 1) and (samples == int(Operator.CONST_1)).all()
@@ -63,7 +63,7 @@ def test_simple_grammar(device: Literal["cpu", "cuda"]):
 def test_constant_grammar(device: Literal["cpu", "cuda"]):
     grammar = f"S -> C [1.0]"
     pcfg = ProbabilisticContextFreeGrammar(grammar=grammar, start_symbol="S", padded_maximum_length=1, n_variables=0, device=torch.device(device))
-    samples = pcfg.sample_string_expression(10)
+    samples = pcfg.sample_infix(10)
     assert samples.shape == (10, 1)
     assert (samples == int(Operator.LEARNABLE_CONSTANT)).all()
 
@@ -73,7 +73,7 @@ def test_variable_grammar(device: Literal["cpu", "cuda"]):
     for i in range(10):
         grammar = f"S -> X_{i} [1.0]"
         pcfg = ProbabilisticContextFreeGrammar(grammar, "S", 1, 10, torch.device(device))
-        samples = pcfg.sample_string_expression(10)
+        samples = pcfg.sample_infix(10)
         # Assert that samples is a constant tensor of the with value Operator.VAR_START_ID + i
         assert samples.shape == (10, 1)
         assert (samples == int(Operator.VAR_START_ID) + i).all()
@@ -90,7 +90,7 @@ def test_unary_operator_grammar(device: Literal["cpu", "cuda"], op: str):
         pytest.skip("CUDA not available")
     grammar = f"S -> {op} ( 1 ) [0.5]" + "\n" + "S -> 1 [0.5]" 
     pcfg = ProbabilisticContextFreeGrammar(grammar, "S", 5, 0, torch.device(device))
-    samples = pcfg.sample_string_expression(1000)
+    samples = pcfg.sample_infix(1000)
     # Assert that samples contains both the operator and the constant with about 50% probability
     op_id = {"exp": int(Operator.EXP), "sin": int(Operator.SIN), "cos": int(Operator.COS)}[op]
     assert samples.shape == (1000, 5)
@@ -110,7 +110,7 @@ def test_binary_operator_grammar(device: Literal["cpu", "cuda"], op: str, op_id:
     op_symbol = {"add": "+", "sub": "-", "mul": "*", "div": "/", "pow": "^"}[op]
     grammar = f"S -> 1 {op_symbol} 1 [0.5]\nS -> 1 [0.5]"
     pcfg = ProbabilisticContextFreeGrammar(grammar, "S", 3, 0, torch.device(device))
-    samples = pcfg.sample_string_expression(1000)
+    samples = pcfg.sample_infix(1000)
     
     assert samples.shape == (1000, 3)
     # Check that the operator appears in the samples
@@ -127,7 +127,7 @@ def test_test_grammar(device: Literal["cpu", "cuda"]):
     if not torch.cuda.is_available() and device == "cuda":
         pytest.skip("CUDA not available")
     pcfg = ProbabilisticContextFreeGrammar(test_grammar, "E", 128, 1, torch.device(device), verbose=True)
-    samples = pcfg.sample_string_expression(100)
+    samples = pcfg.sample_infix(100)
     assert samples.shape == (100, 128)
     strings = pcfg.to_string(samples)
     for s in strings:
@@ -140,7 +140,7 @@ def test_test_grammar(device: Literal["cpu", "cuda"]):
     print(f"--- Benchmarking on {device} ---")
     for batch_size in ([100, 1000, 10000, 100000, 1000000] + ([10000000] if device == "cuda" else [])):
         start = time.time()
-        samples = pcfg.sample_string_expression(batch_size)
+        samples = pcfg.sample_infix(batch_size)
         if device == "cuda":
             torch.cuda.synchronize()
         end = time.time()
@@ -227,7 +227,7 @@ def test_generation_max_tries_exceeded():
     )
 
     with pytest.raises(RuntimeError, match="Could not produce a valid expression within the max_tries limit"):
-        pcfg.sample_string_expression(1)
+        pcfg.sample_infix(1)
 
 # --- Test comparing probabilities ---
 @pytest.mark.large
@@ -257,7 +257,7 @@ def test_python_vs_cpp_cuda_probabilities():
 
     # C++/CUDA implementation sampling
     pcfg_cpu = ProbabilisticContextFreeGrammar(test_grammar, "E", limit, 1, torch.device("cpu"))
-    samples_cpu = pcfg_cpu.sample_string_expression(n_samples)
+    samples_cpu = pcfg_cpu.sample_infix(n_samples)
     strings_cpu = pcfg_cpu.to_string(samples_cpu)
     cpp_counts : dict[str, int] = defaultdict(int)
     for s in strings_cpu:
@@ -267,7 +267,7 @@ def test_python_vs_cpp_cuda_probabilities():
     index = get_cuda_device_with_min_memory()
     
     pcfg_cuda = ProbabilisticContextFreeGrammar(test_grammar, "E", limit, 1, torch.device(f"cuda:{index}"))
-    samples_cuda = pcfg_cuda.sample_string_expression(n_samples)
+    samples_cuda = pcfg_cuda.sample_infix(n_samples)
     strings_cuda = pcfg_cuda.to_string(samples_cuda)
     cpp_counts_cuda : dict[str, int] = defaultdict(int)
     for s in strings_cuda:

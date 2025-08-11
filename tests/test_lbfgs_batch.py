@@ -1,6 +1,6 @@
 # test_lbfgs.py
 
-from typing import Literal
+from typing import Literal, Any
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -76,7 +76,7 @@ def test_correctness_rosenbrock(device : str, line_search_fn : Literal['strong_w
 
 
 @pytest.mark.large
-def test_benchmark_large_batch(benchmark, device : str):
+def test_benchmark_large_batch(benchmark : Any, device : str):
     """
     Benchmarks the optimizer on a large number of problems.
     This test is marked as 'large' and can be skipped with `pytest -m "not large"`.

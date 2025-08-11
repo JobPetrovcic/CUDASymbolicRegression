@@ -36,18 +36,19 @@ public:
     */
     ProbabilisticContextFreeGrammar(std::string grammar, std::string start_symbol, int64_t padded_maximum_length, int64_t n_variables, torch::Device device, int64_t max_tries = 100, float tolerance = DEFAULT_tolerence, bool verbose = false);
     ~ProbabilisticContextFreeGrammar();
-    std::tuple<torch::Tensor, torch::Tensor> sample(int64_t B, int verbosity = 0);
-    torch::Tensor sample_string_expression(int64_t B);
+    torch::Tensor sample_infix(int64_t B);
     std::vector<std::string> to_string(torch::Tensor expressions);
 
-    std::tuple<torch::Tensor, torch::Tensor> parse_to_prefix(torch::Tensor expressions, int verbosity = 0);
-    std::tuple<torch::Tensor, torch::Tensor> parse_to_prefix_parent(torch::Tensor expressions, int verbosity = 0);
-    std::tuple<torch::Tensor, torch::Tensor> parse_to_postfix(torch::Tensor expressions, int verbosity = 0);
-    std::tuple<torch::Tensor, torch::Tensor> parse_to_postfix_parent(torch::Tensor expressions, int verbosity = 0);
+    torch::Tensor infix_to_prefix(torch::Tensor expressions, int verbosity = 0);
+    torch::Tensor infix_to_postfix(torch::Tensor expressions, int verbosity = 0);
 
     torch::Tensor postfix_to_infix(torch::Tensor expressions, int64_t max_infix_len, int verbosity = 0);
     torch::Tensor prefix_to_infix(torch::Tensor expressions, int64_t max_infix_len, int verbosity = 0);
-    std::tuple<torch::Tensor, torch::Tensor> prefix_to_postfix_parent(torch::Tensor expressions, int verbosity = 0);
+    torch::Tensor prefix_to_postfix(torch::Tensor expressions, int verbosity = 0);
+    torch::Tensor postfix_to_prefix(torch::Tensor expressions, int verbosity = 0);
+
+    torch::Tensor get_prefix_parent(torch::Tensor expressions, int verbosity = 0);
+    torch::Tensor get_postfix_children(torch::Tensor expressions, int verbosity = 0);
 
     torch::Device device;
 
@@ -103,6 +104,11 @@ private:
     std::vector<int64_t> parse_sides(std::string s, std::string line);
 
     void process_parsing_errors(const torch::Tensor &errors, const torch::Tensor &expressions, const std::string &context, int verbosity = 0);
+
+    // Checks
+    void infix_checks(torch::Tensor infix_ops);
+    void prefix_checks(torch::Tensor prefix_ops);
+    void postfix_checks(torch::Tensor postfix_ops);
 
     torch::Tensor id_to_pos;
     torch::Tensor rule_lhs;          // Shape: (num_rules,)

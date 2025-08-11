@@ -6,7 +6,7 @@ constexpr int64_t HARD_MAX_LENGTH = 128;
 constexpr int64_t INVALID_RULE = -2;
 constexpr int64_t NULL_PARENT = -1;
 
-void pcfg_sample_string_expression_cpu_impl(
+void sample_infix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> rule_lhs,
     const torch::TensorAccessor<int64_t, 1> rhs_ptr,
     const torch::TensorAccessor<int64_t, 1> rhs_concat,
@@ -20,7 +20,7 @@ void pcfg_sample_string_expression_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> seeds,
     int64_t B);
 
-void pcfg_sample_string_expression_cuda_impl(
+void sample_infix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 1> rule_lhs,
     const torch::PackedTensorAccessor32<int64_t, 1> rhs_ptr,
     const torch::PackedTensorAccessor32<int64_t, 1> rhs_concat,
@@ -34,105 +34,83 @@ void pcfg_sample_string_expression_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 1> seeds,
     int64_t B);
 
-void parse_to_prefix_cpu_impl(
+void infix_to_prefix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> precedence,
     const torch::TensorAccessor<int64_t, 2> expressions,
     torch::TensorAccessor<int64_t, 2> ops,
-    torch::TensorAccessor<int64_t, 3> children,
     torch::TensorAccessor<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B,
     int64_t M);
 
-void parse_to_prefix_cuda_impl(
+void infix_to_prefix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 1> precedence,
     const torch::PackedTensorAccessor32<int64_t, 2> expressions,
     torch::PackedTensorAccessor32<int64_t, 2> ops,
-    torch::PackedTensorAccessor32<int64_t, 3> children,
     torch::PackedTensorAccessor32<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B,
     int64_t M);
 
-void parse_to_prefix_parent_cpu_impl(
+void infix_to_prefix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> precedence_acc,
     const torch::TensorAccessor<int64_t, 2> expressions_acc,
     torch::TensorAccessor<int64_t, 2> ops_acc,
-    torch::TensorAccessor<int64_t, 2> parents_acc,
     torch::TensorAccessor<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B, int64_t M);
 
-void parse_to_prefix_parent_cuda_impl(
+void infix_to_prefix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 1> precedence,
     const torch::PackedTensorAccessor32<int64_t, 2> expressions,
     torch::PackedTensorAccessor32<int64_t, 2> ops,
-    torch::PackedTensorAccessor32<int64_t, 2> parents,
     torch::PackedTensorAccessor32<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B,
     int64_t M);
 
-void parse_to_postfix_cpu_impl(
+void infix_to_postfix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> precedence,
     const torch::TensorAccessor<int64_t, 2> expressions,
     torch::TensorAccessor<int64_t, 2> ops,
-    torch::TensorAccessor<int64_t, 3> children,
     torch::TensorAccessor<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B,
     int64_t M);
 
-void parse_to_postfix_cuda_impl(
+void infix_to_postfix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 1> precedence,
     const torch::PackedTensorAccessor32<int64_t, 2> expressions,
     torch::PackedTensorAccessor32<int64_t, 2> ops,
-    torch::PackedTensorAccessor32<int64_t, 3> children,
     torch::PackedTensorAccessor32<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B,
     int64_t M);
 
-void parse_to_postfix_parent_cpu_impl(
+void infix_to_postfix_cpu_impl(
     const torch::TensorAccessor<int64_t, 1> precedence_acc,
     const torch::TensorAccessor<int64_t, 2> expressions_acc,
     torch::TensorAccessor<int64_t, 2> ops_acc,
-    torch::TensorAccessor<int64_t, 2> parents_acc,
     torch::TensorAccessor<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B, int64_t M);
 
-void parse_to_postfix_parent_cuda_impl(
+void infix_to_postfix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 1> precedence,
     const torch::PackedTensorAccessor32<int64_t, 2> expressions,
     torch::PackedTensorAccessor32<int64_t, 2> ops,
-    torch::PackedTensorAccessor32<int64_t, 2> parents,
     torch::PackedTensorAccessor32<int64_t, 1> errors,
     int64_t lparenthesis_id,
     int64_t rparenthesis_id,
     int64_t B,
     int64_t M);
-
-void postfix_to_infix_cpu_impl(
-    const torch::TensorAccessor<int64_t, 2> postfix_acc,
-    torch::TensorAccessor<int64_t, 2> infix_acc,
-    torch::TensorAccessor<int64_t, 1> errors_acc,
-    int64_t lparen_id, int64_t rparen_id,
-    int64_t B, int64_t M_postfix, int64_t M_infix);
-
-void postfix_to_infix_cuda_impl(
-    const torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
-    torch::PackedTensorAccessor32<int64_t, 2> infix_acc,
-    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
-    int64_t lparen_id, int64_t rparen_id,
-    int64_t B, int64_t M_postfix, int64_t M_infix);
 
 void prefix_to_infix_cpu_impl(
     const torch::TensorAccessor<int64_t, 2> prefix_acc,
@@ -148,16 +126,65 @@ void prefix_to_infix_cuda_impl(
     int64_t lparen_id, int64_t rparen_id,
     int64_t B, int64_t M_prefix, int64_t M_infix);
 
-void prefix_to_postfix_parent_cpu_impl(
+void postfix_to_infix_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> postfix_acc,
+    torch::TensorAccessor<int64_t, 2> infix_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_postfix, int64_t M_infix);
+
+void postfix_to_infix_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> infix_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t lparen_id, int64_t rparen_id,
+    int64_t B, int64_t M_postfix, int64_t M_infix);
+
+void prefix_to_postfix_cpu_impl(
     const torch::TensorAccessor<int64_t, 2> prefix_acc,
     torch::TensorAccessor<int64_t, 2> postfix_acc,
-    torch::TensorAccessor<int64_t, 2> parents_acc,
     torch::TensorAccessor<int64_t, 1> errors_acc,
-    int64_t B, int64_t M_prefix, int64_t M_postfix);
+    int64_t B, int64_t M_prefix);
 
-void prefix_to_postfix_parent_cuda_impl(
+void prefix_to_postfix_cuda_impl(
     const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
     torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
-    torch::PackedTensorAccessor32<int64_t, 2> parents_acc,
     torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
-    int64_t B, int64_t M_prefix, int64_t M_postfix);
+    int64_t B, int64_t M_prefix);
+
+void postfix_to_prefix_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> postfix_acc,
+    torch::TensorAccessor<int64_t, 2> prefix_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_postfix);
+
+void postfix_to_prefix_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_postfix);
+
+// Structural auxiliary functions
+void get_prefix_parent_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> prefix_acc,
+    torch::TensorAccessor<int64_t, 2> parent_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix);
+
+void get_prefix_parent_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> prefix_acc,
+    torch::PackedTensorAccessor32<int64_t, 2> parent_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_prefix);
+
+void get_postfix_children_cpu_impl(
+    const torch::TensorAccessor<int64_t, 2> postfix_acc,
+    torch::TensorAccessor<int64_t, 3> children_acc,
+    torch::TensorAccessor<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_postfix);
+
+void get_postfix_children_cuda_impl(
+    const torch::PackedTensorAccessor32<int64_t, 2> postfix_acc,
+    torch::PackedTensorAccessor32<int64_t, 3> children_acc,
+    torch::PackedTensorAccessor32<int64_t, 1> errors_acc,
+    int64_t B, int64_t M_postfix);

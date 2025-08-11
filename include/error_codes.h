@@ -29,14 +29,14 @@ enum class ErrorCode : int64_t
     EVAL_BACKWARD_DIV_BY_ZERO = 204,   // Gradient for a/b where b = 0.
                                        // EVAL_BACKWARD_POW_WITH_NEGATIVE_BASE = 205, // Gradient for pow(a, b) where a < 0. Not used in Pytorch.
 
-    // --- PCFG Generation/Sampling Errors (from pcfg_sample_string_expression) ---
+    // --- PCFG Generation/Sampling Errors (from sample_infix) ---
     GENERATION_ERROR_START = 300,
     GENERATION_STACK_OVERFLOW = 301,      // The internal generation stack exceeded its capacity.
     GENERATION_EXPRESSION_TOO_LONG = 302, // The generated string of tokens exceeded the maximum padded length.
     GENERATION_MAX_TRIES_EXCEEDED = 303,  // Failed to generate a valid expression within the `max_tries` limit.
     GENERATION_NO_VALID_RULE_FOUND = 304, // During sampling, a random number did not map to any rule (should be impossible if probabilities sum to 1).
 
-    // --- Infix-to-Postfix/Prefix Parsing Errors (from parse_to_postfix/prefix) ---
+    // --- Infix-to-Postfix/Prefix Parsing Errors (from infix_to_postfix/prefix) ---
     PARSING_ERROR_START = 400,
     PARSING_OUTPUT_QUEUE_OVERFLOW = 401,           // The output queue for the shunting-yard algorithm exceeded its capacity.
     PARSING_OPERATOR_STACK_OVERFLOW = 402,         // The operator stack in the shunting-yard algorithm overflowed.
@@ -51,12 +51,15 @@ enum class ErrorCode : int64_t
     CONVERSION_ERROR_START = 500,
     CONVERSION_RESULTING_INFIX_TOO_LONG = 501,   // The resulting infix string exceeded the maximum allowed length.
     CONVERSION_RESULTING_POSTFIX_TOO_LONG = 502, // The resulting postfix string exceeded the maximum allowed length.
-    CONVERSION_INTERNAL_STACK_OVERFLOW = 503,    // Internal stack for building infix string overflowed.
-    CONVERSION_UNARY_OP_MISSING_OPERAND = 504,   // Malformed input: a unary operator was found without an operand on the stack.
-    CONVERSION_BINARY_OP_MISSING_OPERANDS = 505, // Malformed input: a binary operator was found with fewer than two operands on the stack.
-    CONVERSION_MALFORMED_EXPRESSION = 506,       // Malformed input: e.g., too many items left on the stack at the end of conversion.
-    CONVERSION_MULTIPLE_ROOTS = 507,             // Conversion resulted in multiple roots in the infix expression, which is not allowed.
-    CONVERSION_UNEXPECTED_TOKEN = 508,           // An unexpected token was encountered during conversion (e.g., an operator without operands).
+    CONVERSION_RESULTING_PREFIX_TOO_LONG = 503,  // The resulting prefix string exceeded the maximum allowed length.
+    CONVERSION_INTERNAL_STACK_OVERFLOW = 504,    // Internal stack for building infix string overflowed.
+    CONVERSION_UNARY_OP_MISSING_OPERAND = 505,   // Malformed input: a unary operator was found without an operand on the stack.
+    CONVERSION_BINARY_OP_MISSING_OPERANDS = 506, // Malformed input: a binary operator was found with fewer than two operands on the stack.
+    CONVERSION_MALFORMED_EXPRESSION = 507,       // Malformed input: e.g., too many items left on the stack at the end of conversion.
+    CONVERSION_MULTIPLE_ROOTS = 508,             // Conversion resulted in multiple roots in the infix expression, which is not allowed.
+    CONVERSION_UNEXPECTED_TOKEN = 509,           // An unexpected token was encountered during conversion (e.g., an operator without operands).
+
+    INTERNAL_ERROR = 1000, // A catch-all for any internal errors that do not fit into the above categories.
 };
 
 /**
@@ -152,8 +155,8 @@ inline std::string getErrorMessage(ErrorCode code, const std::string &context = 
     case ErrorCode::CONVERSION_RESULTING_POSTFIX_TOO_LONG:
         base_message = "Conversion failed: Resulting postfix expression is longer than the maximum allowed length.";
         break;
-    case ErrorCode::CONVERSION_INTERNAL_STACK_OVERFLOW:
-        base_message = "Conversion failed: Internal workspace stack overflowed.";
+    case ErrorCode::CONVERSION_RESULTING_PREFIX_TOO_LONG:
+        base_message = "Conversion failed: Resulting prefix expression is longer than the maximum allowed length.";
         break;
     case ErrorCode::CONVERSION_UNARY_OP_MISSING_OPERAND:
         base_message = "Conversion failed: Malformed input, unary operator is missing an operand.";
@@ -169,6 +172,10 @@ inline std::string getErrorMessage(ErrorCode code, const std::string &context = 
         break;
     case ErrorCode::CONVERSION_UNEXPECTED_TOKEN:
         base_message = "Conversion failed: Unexpected token encountered (e.g., an operator without operands).";
+        break;
+
+    case ErrorCode::INTERNAL_ERROR:
+        base_message = "An internal error occurred that does not fit into the above categories.";
         break;
 
     // --- Default ---

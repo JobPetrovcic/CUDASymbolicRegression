@@ -92,10 +92,10 @@ def run_conversion_test(pcfg_obj: ProbabilisticContextFreeGrammar, conversion_ty
     expected_ids: torch.Tensor = to_ids(pcfg_obj, expected_str_list)
 
     if conversion_type == "postfix_to_infix":
-        postfix_ops, _ = pcfg_obj.parse_to_postfix(input_ids)
+        postfix_ops = pcfg_obj.infix_to_postfix(input_ids)
         result: torch.Tensor = pcfg_obj.postfix_to_infix(postfix_ops, 100)
     elif conversion_type == "prefix_to_infix":
-        prefix_ops, _ = pcfg_obj.parse_to_prefix(input_ids)
+        prefix_ops = pcfg_obj.infix_to_prefix(input_ids)
         result = pcfg_obj.prefix_to_infix(prefix_ops, 100)
     else:
         raise ValueError(f"Unknown conversion type: {conversion_type}")
@@ -185,10 +185,10 @@ class TestInfixConversions:
         expected_ids3 = to_ids(pcfg, expr3_exp)
 
         if conversion_type == "postfix_to_infix":
-            postfix_ops, _ = pcfg.parse_to_postfix(input_batch)
+            postfix_ops = pcfg.infix_to_postfix(input_batch)
             result_batch = pcfg.postfix_to_infix(postfix_ops, 100)
         else:
-            prefix_ops, _ = pcfg.parse_to_prefix(input_batch)
+            prefix_ops = pcfg.infix_to_prefix(input_batch)
             result_batch = pcfg.prefix_to_infix(prefix_ops, 100)
 
         assert torch.equal(trim_padding(result_batch[0]), expected_ids1)
@@ -201,14 +201,14 @@ class TestConversionErrors:
     
     def test_postfix_to_infix_output_too_short(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
         string_expr = to_ids(pcfg, ['X_0', '+', '5']).unsqueeze(0)
-        postfix_ops, _ = pcfg.parse_to_postfix(string_expr)
+        postfix_ops = pcfg.infix_to_postfix(string_expr)
         
         with pytest.raises(RuntimeError, match=" Resulting infix expression is longer than the maximum allowed length"):
             pcfg.postfix_to_infix(postfix_ops, 4)
 
     def test_prefix_to_infix_output_too_short(self, pcfg: ProbabilisticContextFreeGrammar) -> None:
         string_expr = to_ids(pcfg, ['X_0', '+', '5']).unsqueeze(0)
-        prefix_ops, _ = pcfg.parse_to_prefix(string_expr)
+        prefix_ops = pcfg.infix_to_prefix(string_expr)
         
         with pytest.raises(RuntimeError, match=" Resulting infix expression is longer than the maximum allowed length"):
             pcfg.prefix_to_infix(prefix_ops, 4)

@@ -26,7 +26,7 @@ P -> ^2 [1.0]
 
 # Parametrize device to test both CPU and CUDA implementations
 @pytest.mark.parametrize("device", ["cpu", f"cuda:{get_cuda_device_with_min_memory()}"])
-def test_generated_evalvation(device : str):
+def test_generated_evaluation(device: str):
     n_variables = 2
     M = 128
     pcfg = ProbabilisticContextFreeGrammar(
@@ -38,9 +38,11 @@ def test_generated_evalvation(device : str):
     )
     N = 100
     B = 10
-    ops, ch = pcfg.sample(B)
-    c = create_constants(ops)
+    infix_ops= pcfg.sample_infix(B)
+    postfix_ops = pcfg.infix_to_postfix(infix_ops)
+    ch = pcfg.get_postfix_children(postfix_ops)
+    c = create_constants(postfix_ops)
     X = torch.randn(N, n_variables, device=torch.device(device))
 
-    evaluated = evaluate(X, ops, ch, c)
+    evaluated = evaluate(X, postfix_ops, ch, c)
     assert evaluated.shape == (B, M, N)
